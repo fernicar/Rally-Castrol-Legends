@@ -1,0 +1,15 @@
+{
+  "maxSpeed": 18,
+  "acceleration": 0.5,
+  "reversePower": 0.15,
+  "brakePower": 0.6,
+  "friction": 0.02,
+  "drag": 0.005,
+  "maxSteerAngle": 0.2,
+  "steerSpeed": 0.1,
+  "steerReturn": 0.3,
+  "corneringStiffness": 0.01,
+  "offRoadFriction": 0.07,
+  "cameraSmoothness": 0.1,
+  "carScale": 2
+}
