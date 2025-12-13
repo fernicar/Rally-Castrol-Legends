@@ -8,7 +8,8 @@ export enum GameMode {
 export enum TrackType {
   LOOP = 'LOOP',
   INFINITE = 'INFINITE',
-  URBAN = 'URBAN'
+  URBAN = 'URBAN',
+  TOUGE = 'TOUGE'
 }
 
 export interface Point {

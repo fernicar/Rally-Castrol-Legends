@@ -129,7 +129,9 @@ const App: React.FC = () => {
                         ? '∞ PROCEDURAL'
                         : track.type === TrackType.URBAN
                           ? '🏙️ OPEN WORLD'
-                          : `${track.lapsToWin} LAPS • TECHNICAL`}
+                          : track.type === TrackType.TOUGE
+                            ? '⛰️ DOWNHILL TOUGE'
+                            : `${track.lapsToWin} LAPS • TECHNICAL`}
                     </p>
                   </button>
                   

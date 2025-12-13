@@ -9,6 +9,12 @@ import {
   TILE_SIZE,
   ROAD_WIDTH
 } from '../services/urbanGenerator';
+import {
+  createTougeGenState,
+  generateTougeSegment,
+  TougeGenState,
+  TOUGE_CONFIG
+} from '../services/tougeGenerator';
 
 interface GameEngineProps {
   track: TrackData;
@@ -23,13 +29,15 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
   // Game State Refs (Mutable for loop performance)
   const initialPos = track.type === TrackType.URBAN
     ? { x: TILE_SIZE / 2, y: TILE_SIZE / 2 } // Urban mode spawns at center of tile (0,0)
-    : { x: track.points[1]?.x || 0, y: track.points[1]?.y || 0 }; // Other modes use point 1
+    : track.type === TrackType.TOUGE
+      ? { x: track.points[5]?.x || 400, y: track.points[5]?.y || 0 } // Touge starts mid-track
+      : { x: track.points[1]?.x || 0, y: track.points[1]?.y || 0 }; // Other modes use point 1
 
   const carRef = useRef<CarState>({
     x: initialPos.x,
     y: initialPos.y,
     speed: 0,
-    angle: 0, // Facing East initially
+    angle: track.type === TrackType.TOUGE ? -Math.PI / 2 : 0, // Touge faces up, others face East
     velocity: { x: 0, y: 0 },
     steeringAngle: 0,
     angularVelocity: 0, // Phase 1: rotation rate
@@ -66,7 +74,11 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       remainingSteps: 20,
       targetCurvature: 0,
       currentCurvature: 0
-    }
+    },
+    // Touge Gen State (for TOUGE mode)
+    tougeState: track.type === TrackType.TOUGE ? createTougeGenState() : null,
+    // Distance traveled (for scoring in Touge mode)
+    distanceTraveled: 0
   });
 
   // Urban state ref for Urban Freeroam mode
@@ -496,9 +508,9 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
           
           const p1 = state.trackPoints[idx];
           const p2 = state.trackPoints[(idx + 1) % totalPoints];
-          
-          // Infinite track doesn't wrap last to first
-          if (track.type === TrackType.INFINITE && idx === totalPoints - 1) continue;
+
+          // Infinite and Touge tracks don't wrap last to first
+          if ((track.type === TrackType.INFINITE || track.type === TrackType.TOUGE) && idx === totalPoints - 1) continue;
 
           const d = distToSegment(car, p1, p2);
           if (d < minDist) minDist = d;
@@ -707,6 +719,65 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
             state.lastCheckpointIndex = bestIdx;
         }
 
+      } else if (track.type === TrackType.TOUGE && state.tougeState) {
+        // === TOUGE LOGIC ===
+        // Since we're driving upward (negative Y), we generate track at the front (index 0)
+        // and remove track at the back (last index)
+        const tougeState = state.tougeState;
+
+        // Generate new track ahead (at the front when car is within 3000px)
+        let generatedCount = 0;
+        while (generatedCount < 200) { // Generate up to 200 segments per frame
+          const firstP = state.trackPoints[0];
+          const distToFront = Math.sqrt((car.x - firstP.x) ** 2 + (car.y - firstP.y) ** 2);
+
+          // Stop if we have enough track ahead
+          if (distToFront >= 3000 && state.trackPoints.length >= 100) break;
+
+          const currentFirstPoint = state.trackPoints[0];
+          const result = generateTougeSegment(currentFirstPoint, tougeState);
+          state.trackPoints.unshift(result.point); // Add to front
+          state.tougeState = result.state;
+          state.lastCheckpointIndex++; // Adjust index since we added at front
+
+          generatedCount++;
+
+          // Safety: don't generate infinite in one frame
+          if (state.trackPoints.length > 500) break;
+        }
+
+        // Remove old track points (behind the car at the end of the array)
+        const lastP = state.trackPoints[state.trackPoints.length - 1];
+        const distFromEnd = Math.sqrt((car.x - lastP.x) ** 2 + (car.y - lastP.y) ** 2);
+
+        if (state.trackPoints.length > 300 && distFromEnd > 2000) {
+          const p0 = state.trackPoints[state.trackPoints.length - 1];
+          const p1 = state.trackPoints[state.trackPoints.length - 2];
+          const dist = Math.sqrt((p1.x - p0.x) ** 2 + (p1.y - p0.y) ** 2);
+
+          state.dashOffset = (state.dashOffset + dist) % 40;
+          state.trackPoints.pop(); // Remove from end
+          state.distanceTraveled += dist;
+        }
+
+        // Update checkpoint progress (find closest point ahead - toward front of array)
+        let bestIdx = -1;
+        let bestDist = Infinity;
+        for (let i = 0; i < 50; i++) {
+          const idx = state.lastCheckpointIndex - i; // Look backward in array (ahead in direction)
+          if (idx < 0) break;
+          const p = state.trackPoints[idx];
+          const d = (car.x - p.x) ** 2 + (car.y - p.y) ** 2;
+          if (d < bestDist) {
+            bestDist = d;
+            bestIdx = idx;
+          }
+        }
+
+        if (bestIdx >= 0 && bestIdx < state.lastCheckpointIndex) {
+          state.lastCheckpointIndex = bestIdx;
+        }
+
       } else if (track.type === TrackType.LOOP) {
         // LOOP LOGIC
         // Scan a window ahead of current checkpoint to find closer points
@@ -870,6 +941,103 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
             );
           }
         }
+      } else if (track.type === TrackType.TOUGE) {
+        // === TOUGE MOUNTAIN ROAD RENDERING ===
+
+        const TOUGE_COLORS = {
+          CLIFF_DARK: '#2a1a0a',
+          CLIFF_LIGHT: '#4a3a2a',
+          GUARDRAIL: '#cccccc',
+          GUARDRAIL_POST: '#888888',
+          ROAD_ASPHALT: '#3a3a3a',
+          ROAD_EDGE: '#222222',
+          CENTER_LINE: '#ffff00',
+          SHADOW: 'rgba(0,0,0,0.4)',
+        };
+
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        const drawPoints = state.trackPoints;
+
+        // 1. Outer cliff/mountain edge (left side - "cliff" side)
+        ctx.lineWidth = track.width + 120;
+        ctx.strokeStyle = TOUGE_COLORS.CLIFF_DARK;
+        ctx.beginPath();
+        ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
+        for (let i = 1; i < drawPoints.length; i++) {
+          ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
+        }
+        ctx.stroke();
+
+        // 2. Inner mountain edge (right side - "mountain" side)
+        ctx.lineWidth = track.width + 80;
+        ctx.strokeStyle = TOUGE_COLORS.CLIFF_LIGHT;
+        ctx.stroke();
+
+        // 3. Road shoulder
+        ctx.lineWidth = track.width + 30;
+        ctx.strokeStyle = TOUGE_COLORS.ROAD_EDGE;
+        ctx.stroke();
+
+        // 4. Road surface
+        ctx.lineWidth = track.width;
+        ctx.strokeStyle = TOUGE_COLORS.ROAD_ASPHALT;
+        ctx.stroke();
+
+        // 5. Center line (yellow dashed)
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = TOUGE_COLORS.CENTER_LINE;
+        ctx.setLineDash([15, 25]);
+        ctx.lineDashOffset = -state.dashOffset;
+        ctx.beginPath();
+        ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
+        for (let i = 1; i < drawPoints.length; i++) {
+          ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
+
+        // 6. Guardrails (on cliff side)
+        ctx.strokeStyle = TOUGE_COLORS.GUARDRAIL;
+        ctx.lineWidth = 6;
+
+        // Draw continuous guardrail line
+        ctx.beginPath();
+        for (let i = 1; i < drawPoints.length - 1; i++) {
+          const p = drawPoints[i];
+          const prev = drawPoints[i - 1];
+          const next = drawPoints[i + 1];
+
+          const dx = next.x - prev.x;
+          const dy = next.y - prev.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len === 0) continue;
+
+          const perpX = -dy / len;
+          const perpY = dx / len;
+          const offset = track.width / 2 + 15;
+
+          const gx = p.x + perpX * offset;
+          const gy = p.y + perpY * offset;
+
+          if (i === 1) {
+            ctx.moveTo(gx, gy);
+          } else {
+            ctx.lineTo(gx, gy);
+          }
+
+          // Draw guardrail posts every GUARDRAIL_POST_SPACING pixels
+          if (i % Math.floor(TOUGE_CONFIG.GUARDRAIL_POST_SPACING / TOUGE_CONFIG.SEGMENT_LENGTH) === 0) {
+            ctx.fillStyle = TOUGE_COLORS.GUARDRAIL_POST;
+            const postX = p.x + perpX * offset;
+            const postY = p.y + perpY * offset;
+            ctx.fillRect(postX - 3, postY - 3, 6, 6);
+          }
+        }
+        ctx.stroke();
+
       } else {
         // Standard track rendering
         ctx.lineCap = 'round';
@@ -1172,6 +1340,12 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
                 <div className="bg-black/50 p-2 rounded border-l-4 border-green-500">
                     <span className="text-gray-400 text-sm">LAP</span><br/>
                     {hud.lap} / {track.lapsToWin}
+                </div>
+            )}
+            {track.type === TrackType.TOUGE && (
+                <div className="bg-black/50 p-2 rounded border-l-4 border-blue-500">
+                    <span className="text-gray-400 text-sm">DISTANCE</span><br/>
+                    {Math.floor(gameStateRef.current.distanceTraveled / 10)} <span className="text-xs">M</span>
                 </div>
             )}
             <div className="bg-black/50 p-2 rounded border-l-4 border-yellow-500">
