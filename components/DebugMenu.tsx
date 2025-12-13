@@ -45,6 +45,21 @@ const DebugMenu: React.FC<DebugMenuProps> = ({ config, onConfigChange, tracks, o
     }
   };
 
+  const loadPreset = async (presetName: string) => {
+    try {
+      const response = await fetch(`presets/${presetName}.json`);
+      if (response.ok) {
+        const preset = await response.json();
+        onConfigChange({ ...DEFAULT_TUNING, ...preset });
+        console.log(`Loaded ${preset.presetName} preset`);
+      } else {
+        console.error(`Failed to load preset: ${presetName}`);
+      }
+    } catch (error) {
+      console.error(`Error loading preset ${presetName}:`, error);
+    }
+  };
+
   return (
     <div className="absolute top-0 right-0 h-full w-80 bg-black/80 text-white overflow-y-auto p-4 backdrop-blur-md border-l border-green-500 z-50 shadow-2xl">
       <div className="flex justify-between items-center mb-4 sticky top-0 bg-black/80 pb-2 border-b border-gray-700 pt-2 -mt-2">
@@ -53,6 +68,35 @@ const DebugMenu: React.FC<DebugMenuProps> = ({ config, onConfigChange, tracks, o
       </div>
 
       <div className="space-y-4 text-sm pb-8">
+        
+        {/* VERSION INFO */}
+        <div className="bg-blue-900/30 p-2 rounded mb-4 text-xs">
+          <strong>Physics Version:</strong> {config._version || 1}<br/>
+          {(!config._version || config._version === 1) && <span className="text-yellow-400">⚠️ Old config detected - using defaults for new parameters</span>}
+          {config._version === 2 && <span className="text-green-400">✓ Phase 1 Active</span>}
+          {config._version === 3 && <span className="text-cyan-400">✓ Phase 2 Active (Tire Model)</span>}
+          {config._version === 4 && <span className="text-orange-400">✓ Phase 3 Active (Drivetrain & Braking)</span>}
+          {config._version === 5 && <span className="text-pink-400">✓ Phase 4 Active (Steering & Assists)</span>}
+        </div>
+        
+        {/* PRESET SELECTOR */}
+        <div className="bg-gradient-to-r from-red-900/30 to-green-900/30 p-3 rounded mb-4 border border-red-500/30">
+          <h3 className="text-white font-bold mb-2 text-center">📦 QUICK PRESETS</h3>
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <button onClick={() => loadPreset('track')} className="bg-blue-600 hover:bg-blue-500 py-2 rounded text-xs font-bold uppercase transition-colors">
+              🏁 Track
+            </button>
+            <button onClick={() => loadPreset('rally')} className="bg-yellow-600 hover:bg-yellow-500 py-2 rounded text-xs font-bold uppercase transition-colors">
+              🏔️ Rally
+            </button>
+            <button onClick={() => loadPreset('drift')} className="bg-red-600 hover:bg-red-500 py-2 rounded text-xs font-bold uppercase transition-colors">
+              💨 Drift
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 text-center italic">
+            {config.presetName ? `Active: ${config.presetName}` : 'Custom Tuning'}
+          </p>
+        </div>
         
         {/* TRACK MANAGEMENT */}
         {tracks && onTracksChange && (
@@ -78,8 +122,233 @@ const DebugMenu: React.FC<DebugMenuProps> = ({ config, onConfigChange, tracks, o
             value={config.carScale || 4} onChange={(e) => handleChange('carScale', e.target.value)} className="w-full accent-green-500"/>
         </div>
 
+        {/* PHASE 1: MASS & INERTIA */}
+        <h3 className="text-cyan-400 font-bold border-b border-cyan-700 pb-1 mt-4">Phase 1: Mass & Inertia</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Mass ({config.mass || 1100} kg)</label>
+          <input type="range" min="800" max="2000" step="50" 
+            value={config.mass || 1100} onChange={(e) => handleChange('mass', e.target.value)} className="w-full accent-cyan-500"/>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Inertia Multiplier ({(config.inertiaMultiplier || 1.2).toFixed(1)})</label>
+          <input type="range" min="0.5" max="3.0" step="0.1" 
+            value={config.inertiaMultiplier || 1.2} onChange={(e) => handleChange('inertiaMultiplier', e.target.value)} className="w-full accent-cyan-500"/>
+          <span className="text-xs text-gray-500">High = boat-like, Low = twitchy</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Center of Mass Offset ({(config.centerOfMassOffset || 0).toFixed(1)})</label>
+          <input type="range" min="-1" max="1" step="0.1" 
+            value={config.centerOfMassOffset || 0} onChange={(e) => handleChange('centerOfMassOffset', e.target.value)} className="w-full accent-cyan-500"/>
+          <span className="text-xs text-gray-500">-1 = front bias, +1 = rear bias</span>
+        </div>
+
+        {/* PHASE 1: WEIGHT TRANSFER */}
+        <h3 className="text-cyan-400 font-bold border-b border-cyan-700 pb-1 mt-4">Phase 1: Weight Transfer</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Weight Distribution ({((config.weightDistribution || 0.5) * 100).toFixed(0)}% front)</label>
+          <input type="range" min="0.3" max="0.7" step="0.01" 
+            value={config.weightDistribution || 0.5} onChange={(e) => handleChange('weightDistribution', e.target.value)} className="w-full accent-cyan-500"/>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Accel Transfer ({(config.weightTransferAccel || 0.4).toFixed(2)})</label>
+          <input type="range" min="0" max="1" step="0.05" 
+            value={config.weightTransferAccel || 0.4} onChange={(e) => handleChange('weightTransferAccel', e.target.value)} className="w-full accent-cyan-500"/>
+          <span className="text-xs text-gray-500">Weight shift rearward on throttle</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Brake Transfer ({(config.weightTransferBrake || 0.5).toFixed(2)})</label>
+          <input type="range" min="0" max="1" step="0.05" 
+            value={config.weightTransferBrake || 0.5} onChange={(e) => handleChange('weightTransferBrake', e.target.value)} className="w-full accent-cyan-500"/>
+          <span className="text-xs text-gray-500">Weight shift forward on braking</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Lateral Transfer ({(config.weightTransferLateral || 0.3).toFixed(2)})</label>
+          <input type="range" min="0" max="1" step="0.05" 
+            value={config.weightTransferLateral || 0.3} onChange={(e) => handleChange('weightTransferLateral', e.target.value)} className="w-full accent-cyan-500"/>
+          <span className="text-xs text-gray-500">Weight shift in corners</span>
+        </div>
+
+        {/* PHASE 1: ANGULAR DYNAMICS */}
+        <h3 className="text-cyan-400 font-bold border-b border-cyan-700 pb-1 mt-4">Phase 1: Angular Dynamics</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Angular Damping ({(config.angularDamping || 0.95).toFixed(2)})</label>
+          <input type="range" min="0.90" max="0.99" step="0.01" 
+            value={config.angularDamping || 0.95} onChange={(e) => handleChange('angularDamping', e.target.value)} className="w-full accent-cyan-500"/>
+          <span className="text-xs text-gray-500">Rotation decay rate</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Max Angular Velocity ({(config.angularVelocityMax || 0.15).toFixed(2)})</label>
+          <input type="range" min="0.05" max="0.3" step="0.01" 
+            value={config.angularVelocityMax || 0.15} onChange={(e) => handleChange('angularVelocityMax', e.target.value)} className="w-full accent-cyan-500"/>
+          <span className="text-xs text-gray-500">Max rotation speed</span>
+        </div>
+
+        {/* PHASE 2: TRACTION CURVE */}
+        <h3 className="text-purple-400 font-bold border-b border-purple-700 pb-1 mt-4">Phase 2: Traction Curve</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Peak Grip ({(config.tractionPeak || 1.0).toFixed(2)})</label>
+          <input type="range" min="0.5" max="1.5" step="0.05" 
+            value={config.tractionPeak || 1.0} onChange={(e) => handleChange('tractionPeak', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">Maximum grip before slip</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Sliding Grip ({(config.tractionSliding || 0.7).toFixed(2)})</label>
+          <input type="range" min="0.3" max="1.0" step="0.05" 
+            value={config.tractionSliding || 0.7} onChange={(e) => handleChange('tractionSliding', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">Grip while drifting</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Optimal Slip Angle ({(config.slipAngleOptimal || 10).toFixed(0)}°)</label>
+          <input type="range" min="5" max="20" step="1" 
+            value={config.slipAngleOptimal || 10} onChange={(e) => handleChange('slipAngleOptimal', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">Angle for peak grip</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Peak Slip Angle ({(config.slipAnglePeak || 25).toFixed(0)}°)</label>
+          <input type="range" min="15" max="45" step="1" 
+            value={config.slipAnglePeak || 25} onChange={(e) => handleChange('slipAnglePeak', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">Breakaway point</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Falloff Sharpness ({(config.tractionFalloff || 1.5).toFixed(1)})</label>
+          <input type="range" min="0.5" max="2.5" step="0.1" 
+            value={config.tractionFalloff || 1.5} onChange={(e) => handleChange('tractionFalloff', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">How sharply grip drops</span>
+        </div>
+
+        {/* PHASE 2: TRACTION DISTRIBUTION */}
+        <h3 className="text-purple-400 font-bold border-b border-purple-700 pb-1 mt-4">Phase 2: Traction Balance</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Front Bias ({((config.tractionBiasFront || 0.5) * 100).toFixed(0)}%)</label>
+          <input type="range" min="0.3" max="0.7" step="0.01" 
+            value={config.tractionBiasFront || 0.5} onChange={(e) => handleChange('tractionBiasFront', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">&gt;50% = understeer, &lt;50% = oversteer</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Grip Multiplier ({(config.tractionLossMult || 1.0).toFixed(2)})</label>
+          <input type="range" min="0.5" max="1.0" step="0.05" 
+            value={config.tractionLossMult || 1.0} onChange={(e) => handleChange('tractionLossMult', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">Overall grip reduction</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Low-Speed Wheelspin ({(config.lowSpeedTractionLoss || 0.0).toFixed(2)})</label>
+          <input type="range" min="0" max="1" step="0.05" 
+            value={config.lowSpeedTractionLoss || 0.0} onChange={(e) => handleChange('lowSpeedTractionLoss', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">Wheelspin at low speed</span>
+        </div>
+
+        {/* PHASE 3: DRIVETRAIN */}
+        <h3 className="text-orange-400 font-bold border-b border-orange-700 pb-1 mt-4">Phase 3: Drivetrain</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Drive Type ({config.driveBiasFront !== undefined ? (config.driveBiasFront === 0 ? 'RWD' : config.driveBiasFront === 1 ? 'FWD' : config.driveBiasFront === 0.5 ? 'AWD' : ((config.driveBiasFront * 100).toFixed(0) + '% Front')) : 'RWD'})</label>
+          <input type="range" min="0" max="1" step="0.05" 
+            value={config.driveBiasFront !== undefined ? config.driveBiasFront : 0.0} onChange={(e) => handleChange('driveBiasFront', e.target.value)} className="w-full accent-orange-500"/>
+          <span className="text-xs text-gray-500">0=RWD (drift), 0.5=AWD (rally), 1=FWD (grip)</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Drive Inertia ({(config.driveInertia || 0.9).toFixed(2)})</label>
+          <input type="range" min="0.5" max="2.0" step="0.05" 
+            value={config.driveInertia || 0.9} onChange={(e) => handleChange('driveInertia', e.target.value)} className="w-full accent-orange-500"/>
+          <span className="text-xs text-gray-500">Engine/flywheel momentum</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Engine Braking ({(config.engineBraking || 0.3).toFixed(2)})</label>
+          <input type="range" min="0" max="1" step="0.05" 
+            value={config.engineBraking || 0.3} onChange={(e) => handleChange('engineBraking', e.target.value)} className="w-full accent-orange-500"/>
+          <span className="text-xs text-gray-500">Off-throttle deceleration</span>
+        </div>
+
+        {/* PHASE 3: BRAKING */}
+        <h3 className="text-orange-400 font-bold border-b border-orange-700 pb-1 mt-4">Phase 3: Braking</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Brake Force ({(config.brakeForce || 1.2).toFixed(2)})</label>
+          <input type="range" min="0.5" max="3.0" step="0.1" 
+            value={config.brakeForce || 1.2} onChange={(e) => handleChange('brakeForce', e.target.value)} className="w-full accent-orange-500"/>
+          <span className="text-xs text-gray-500">Overall brake strength</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Brake Bias Front ({((config.brakeBiasFront || 0.55) * 100).toFixed(0)}%)</label>
+          <input type="range" min="0.3" max="0.7" step="0.01" 
+            value={config.brakeBiasFront || 0.55} onChange={(e) => handleChange('brakeBiasFront', e.target.value)} className="w-full accent-orange-500"/>
+          <span className="text-xs text-gray-500">Front brake distribution (&lt;50% = tail slides)</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Handbrake Power ({(config.handbrakePower || 0.8).toFixed(2)})</label>
+          <input type="range" min="0" max="2.0" step="0.1" 
+            value={config.handbrakePower || 0.8} onChange={(e) => handleChange('handbrakePower', e.target.value)} className="w-full accent-orange-500"/>
+          <span className="text-xs text-gray-500">Handbrake strength</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Handbrake Slip Angle ({(config.handbrakeSlipAngle || 35).toFixed(0)}°)</label>
+          <input type="range" min="10" max="90" step="5" 
+            value={config.handbrakeSlipAngle || 35} onChange={(e) => handleChange('handbrakeSlipAngle', e.target.value)} className="w-full accent-orange-500"/>
+          <span className="text-xs text-gray-500">Induced rear slip</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Brake Lockup Rotation ({(config.brakeLockupRotation || 0.5).toFixed(2)})</label>
+          <input type="range" min="0" max="1.0" step="0.05" 
+            value={config.brakeLockupRotation || 0.5} onChange={(e) => handleChange('brakeLockupRotation', e.target.value)} className="w-full accent-orange-500"/>
+          <span className="text-xs text-gray-500">Trail braking rotation</span>
+        </div>
+
+        {/* PHASE 4: STEERING GEOMETRY */}
+        <h3 className="text-pink-400 font-bold border-b border-pink-700 pb-1 mt-4">Phase 4: Steering Geometry</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Steering Lock ({(config.steeringLock || 45).toFixed(0)}°)</label>
+          <input type="range" min="20" max="90" step="5" 
+            value={config.steeringLock || 45} onChange={(e) => handleChange('steeringLock', e.target.value)} className="w-full accent-pink-500"/>
+          <span className="text-xs text-gray-500">Maximum steering angle</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Speed Scale ({((config.steeringSpeedScale !== undefined ? config.steeringSpeedScale : 0.4) * 100).toFixed(0)}%)</label>
+          <input type="range" min="0" max="0.8" step="0.05" 
+            value={config.steeringSpeedScale !== undefined ? config.steeringSpeedScale : 0.4} onChange={(e) => handleChange('steeringSpeedScale', e.target.value)} className="w-full accent-pink-500"/>
+          <span className="text-xs text-gray-500">Steering reduction at max speed</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Input Linearity ({(config.steeringLinearity || 1.0).toFixed(1)})</label>
+          <input type="range" min="0.5" max="2.0" step="0.1" 
+            value={config.steeringLinearity || 1.0} onChange={(e) => handleChange('steeringLinearity', e.target.value)} className="w-full accent-pink-500"/>
+          <span className="text-xs text-gray-500">&gt;1 = sensitive center, &lt;1 = linear</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Counter-Steer Assist ({(config.counterSteerAssist || 0.0).toFixed(2)})</label>
+          <input type="range" min="0" max="1.0" step="0.05" 
+            value={config.counterSteerAssist || 0.0} onChange={(e) => handleChange('counterSteerAssist', e.target.value)} className="w-full accent-pink-500"/>
+          <span className="text-xs text-gray-500">Auto counter-steer in drifts</span>
+        </div>
+
+        {/* PHASE 4: STABILITY ASSISTS */}
+        <h3 className="text-pink-400 font-bold border-b border-pink-700 pb-1 mt-4">Phase 4: Stability Assists</h3>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Stability Control ({(config.stabilityControl || 0.0).toFixed(2)})</label>
+          <input type="range" min="0" max="1.0" step="0.05" 
+            value={config.stabilityControl || 0.0} onChange={(e) => handleChange('stabilityControl', e.target.value)} className="w-full accent-pink-500"/>
+          <span className="text-xs text-gray-500">Anti-spin (reduces power)</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Traction Control ({(config.tractionControl || 0.0).toFixed(2)})</label>
+          <input type="range" min="0" max="1.0" step="0.05" 
+            value={config.tractionControl || 0.0} onChange={(e) => handleChange('tractionControl', e.target.value)} className="w-full accent-pink-500"/>
+          <span className="text-xs text-gray-500">Anti-wheelspin (reduces power)</span>
+        </div>
+        <div className="space-y-1 flex items-center gap-2">
+          <input type="checkbox" 
+            checked={config.absEnabled || false} 
+            onChange={(e) => onConfigChange({ ...config, absEnabled: e.target.checked })} 
+            className="w-4 h-4 accent-pink-500"/>
+          <label className="text-gray-400">ABS Enabled</label>
+          <span className="text-xs text-gray-500 ml-auto">Anti-lock braking</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Drift Assist ({(config.driftAssist || 0.0).toFixed(2)})</label>
+          <input type="range" min="0" max="1.0" step="0.05" 
+            value={config.driftAssist || 0.0} onChange={(e) => handleChange('driftAssist', e.target.value)} className="w-full accent-pink-500"/>
+          <span className="text-xs text-gray-500">Maintains drift angle</span>
+        </div>
+
         {/* CAR PHYSICS */}
-        <h3 className="text-green-400 font-bold border-b border-gray-700 pb-1 mt-4">Car Physics</h3>
+        <h3 className="text-green-400 font-bold border-b border-gray-700 pb-1 mt-4">Legacy: Car Physics</h3>
 
         {/* Speed */}
         <div className="space-y-1">

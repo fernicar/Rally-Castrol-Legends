@@ -1,0 +1,61 @@
+{
+  "_version": 5,
+  "presetName": "Track",
+  "presetAuthor": "Rally Castrol Legends",
+  "presetDescription": "Maximum grip for hot laps. High downforce, responsive handling, ideal for circuit racing.",
+  
+  "mass": 1200,
+  "inertiaMultiplier": 1.0,
+  "centerOfMassOffset": 0.0,
+  
+  "weightDistribution": 0.48,
+  "weightTransferAccel": 0.3,
+  "weightTransferBrake": 0.4,
+  "weightTransferLateral": 0.3,
+  
+  "angularDamping": 0.96,
+  "angularVelocityMax": 0.12,
+  
+  "tractionPeak": 1.3,
+  "tractionSliding": 0.9,
+  "slipAngleOptimal": 8,
+  "slipAnglePeak": 18,
+  "tractionFalloff": 1.8,
+  "tractionBiasFront": 0.52,
+  "tractionLossMult": 1.0,
+  "lowSpeedTractionLoss": 0.0,
+  
+  "driveBiasFront": 0.4,
+  "driveInertia": 0.7,
+  "engineBraking": 0.4,
+  
+  "brakeForce": 1.5,
+  "brakeBiasFront": 0.6,
+  "handbrakePower": 0.5,
+  "handbrakeSlipAngle": 25,
+  "brakeLockupRotation": 0.3,
+  
+  "steeringLock": 40,
+  "steeringSpeedScale": 0.5,
+  "steeringLinearity": 1.2,
+  "counterSteerAssist": 0.0,
+  
+  "stabilityControl": 0.3,
+  "tractionControl": 0.2,
+  "absEnabled": true,
+  "driftAssist": 0.0,
+  
+  "maxSpeed": 22,
+  "acceleration": 0.35,
+  "reversePower": 0.15,
+  "brakePower": 0.8,
+  "friction": 0.018,
+  "drag": 0.004,
+  "maxSteerAngle": 0.5,
+  "steerSpeed": 0.12,
+  "steerReturn": 0.15,
+  "corneringStiffness": 0.15,
+  "offRoadFriction": 0.2,
+  "cameraSmoothness": 0.1,
+  "carScale": 4
+}
