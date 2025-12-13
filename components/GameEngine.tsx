@@ -60,6 +60,27 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
     space: false
   });
 
+  // Gamepad State Management
+  const gamepadRef = useRef<{
+    connected: boolean;
+    index: number;
+    lastTimestamp: number;
+  }>({
+    connected: false,
+    index: -1,
+    lastTimestamp: 0
+  });
+
+  // Keyboard Activity Tracking (for seamless input switching)
+  const keyboardActivityRef = useRef({
+    lastKeyTime: 0,
+    timeout: 500 // Consider keyboard inactive after 500ms
+  });
+
+  const isKeyboardActive = () => {
+    return Date.now() - keyboardActivityRef.current.lastKeyTime < keyboardActivityRef.current.timeout;
+  };
+
   // Biome selection for Endless Rally
   const selectRandomBiome = () => {
     const biomes = [
@@ -111,7 +132,8 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
 
   // UI State (synced less frequently if needed, but here simple enough)
   const [hud, setHud] = useState({ lap: 1, time: 0, speed: 0 });
-  
+  const [isGamepadConnected, setIsGamepadConnected] = useState(false);
+
   // Car Skin Image State
   const [carImage, setCarImage] = useState<HTMLImageElement | null>(null);
   
@@ -169,6 +191,7 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
   // Input Handling
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      keyboardActivityRef.current.lastKeyTime = Date.now();
       switch (e.key.toLowerCase()) {
         case 'w': case 'arrowup': inputsRef.current.up = true; break;
         case 's': case 'arrowdown': inputsRef.current.down = true; break;
@@ -179,6 +202,7 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
+      keyboardActivityRef.current.lastKeyTime = Date.now();
       switch (e.key.toLowerCase()) {
         case 'w': case 'arrowup': inputsRef.current.up = false; break;
         case 's': case 'arrowdown': inputsRef.current.down = false; break;
@@ -196,6 +220,43 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
     };
   }, [onExit]);
 
+  // Gamepad Connection Detection
+  useEffect(() => {
+    const handleGamepadConnected = (e: GamepadEvent) => {
+      console.log('Gamepad connected:', e.gamepad.id);
+      gamepadRef.current.connected = true;
+      gamepadRef.current.index = e.gamepad.index;
+      setIsGamepadConnected(true);
+    };
+
+    const handleGamepadDisconnected = (e: GamepadEvent) => {
+      console.log('Gamepad disconnected');
+      gamepadRef.current.connected = false;
+      gamepadRef.current.index = -1;
+      setIsGamepadConnected(false);
+    };
+
+    window.addEventListener('gamepadconnected', handleGamepadConnected);
+    window.addEventListener('gamepaddisconnected', handleGamepadDisconnected);
+
+    // Check for already connected gamepads on mount
+    const gamepads = navigator.getGamepads();
+    for (let i = 0; i < gamepads.length; i++) {
+      if (gamepads[i]) {
+        console.log('Gamepad already connected:', gamepads[i]?.id);
+        gamepadRef.current.connected = true;
+        gamepadRef.current.index = i;
+        setIsGamepadConnected(true);
+        break;
+      }
+    }
+
+    return () => {
+      window.removeEventListener('gamepadconnected', handleGamepadConnected);
+      window.removeEventListener('gamepaddisconnected', handleGamepadDisconnected);
+    };
+  }, []);
+
   // Main Loop
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -205,8 +266,90 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
 
     let animationFrameId: number;
 
+    // Gamepad Polling Function
+    const pollGamepad = () => {
+      if (!gamepadRef.current.connected) return;
+
+      const gamepads = navigator.getGamepads();
+      const gamepad = gamepads[gamepadRef.current.index];
+
+      if (!gamepad) {
+        gamepadRef.current.connected = false;
+        return;
+      }
+
+      // Deadzone configuration
+      const STICK_DEADZONE = tuning.gamepadSteeringDeadzone || 0.15;
+      const TRIGGER_DEADZONE = tuning.gamepadTriggerDeadzone || 0.05;
+
+      // --- STEERING (Left Stick X-Axis) ---
+      const stickX = gamepad.axes[0] || 0;
+      if (Math.abs(stickX) > STICK_DEADZONE) {
+        if (stickX < 0) {
+          inputsRef.current.left = true;
+          inputsRef.current.right = false;
+        } else {
+          inputsRef.current.right = true;
+          inputsRef.current.left = false;
+        }
+      } else {
+        // Only clear if no keyboard input
+        if (!isKeyboardActive()) {
+          inputsRef.current.left = false;
+          inputsRef.current.right = false;
+        }
+      }
+
+      // --- ACCELERATION (Right Trigger - Analog) ---
+      // Modern gamepads use axes[4] for RT analog value (0.0 to 1.0)
+      const rightTrigger = gamepad.buttons[7]?.value || 0;
+      if (rightTrigger > TRIGGER_DEADZONE) {
+        inputsRef.current.up = true;
+      } else {
+        if (!isKeyboardActive()) {
+          inputsRef.current.up = false;
+        }
+      }
+
+      // --- BRAKING (Left Trigger - Analog) ---
+      // Modern gamepads use axes[5] for LT analog value (0.0 to 1.0)
+      const leftTrigger = gamepad.buttons[6]?.value || 0;
+      if (leftTrigger > TRIGGER_DEADZONE) {
+        inputsRef.current.down = true;
+      } else {
+        if (!isKeyboardActive()) {
+          inputsRef.current.down = false;
+        }
+      }
+
+      // --- HANDBRAKE (A Button or RB) ---
+      const aButton = gamepad.buttons[0]?.pressed || false;
+      const rbButton = gamepad.buttons[5]?.pressed || false;
+      if (aButton || rbButton) {
+        inputsRef.current.space = true;
+      } else {
+        if (!isKeyboardActive()) {
+          inputsRef.current.space = false;
+        }
+      }
+
+      // --- D-PAD FALLBACK CONTROLS ---
+      if (gamepad.buttons[12]?.pressed) inputsRef.current.up = true;
+      if (gamepad.buttons[13]?.pressed) inputsRef.current.down = true;
+      if (gamepad.buttons[14]?.pressed) inputsRef.current.left = true;
+      if (gamepad.buttons[15]?.pressed) inputsRef.current.right = true;
+
+      // --- MENU BUTTON (Start Button) ---
+      if (gamepad.buttons[9]?.pressed) {
+        onExit();
+      }
+    };
+
     const loop = () => {
       if (gameStateRef.current.finished) return;
+
+      // Poll gamepad at start of frame
+      pollGamepad();
 
       const car = carRef.current;
       const inputs = inputsRef.current;
@@ -1454,7 +1597,7 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
 
     animationFrameId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [track, tuning, onFinish]);
+  }, [track, tuning, onFinish, onExit]);
 
   // Canvas Resize
   useEffect(() => {
@@ -1484,6 +1627,12 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       {/* HUD */}
       <div className="absolute top-4 left-4 text-white font-mono text-2xl drop-shadow-md select-none pointer-events-none">
         <div className="flex flex-col gap-2">
+            {isGamepadConnected && (
+                <div className="bg-black/50 p-2 rounded border-l-4 border-purple-500">
+                    <span className="text-gray-400 text-sm">INPUT</span><br/>
+                    <span className="text-lg">🎮 GAMEPAD</span>
+                </div>
+            )}
             <div className="bg-black/50 p-2 rounded border-l-4 border-red-500">
                 <span className="text-gray-400 text-sm">TIME</span><br/>
                 {formatTime(hud.time)}
@@ -1508,12 +1657,25 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       </div>
 
       <div className="absolute bottom-4 right-4 text-white/50 text-sm font-sans select-none pointer-events-none text-right">
-        CONTROLS<br/>
-        W / UP : ACCELERATE<br/>
-        S / DOWN : BRAKE/REVERSE<br/>
-        A / LEFT : TURN LEFT<br/>
-        D / RIGHT : TURN RIGHT<br/>
-        ESC : MENU
+        {isGamepadConnected ? (
+          <>
+            GAMEPAD CONTROLS<br/>
+            RT : ACCELERATE<br/>
+            LT : BRAKE/REVERSE<br/>
+            LEFT STICK : STEER<br/>
+            A / RB : HANDBRAKE<br/>
+            START : MENU
+          </>
+        ) : (
+          <>
+            CONTROLS<br/>
+            W / UP : ACCELERATE<br/>
+            S / DOWN : BRAKE/REVERSE<br/>
+            A / LEFT : TURN LEFT<br/>
+            D / RIGHT : TURN RIGHT<br/>
+            ESC : MENU
+          </>
+        )}
       </div>
     </div>
   );
