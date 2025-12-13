@@ -14,6 +14,7 @@ const App: React.FC = () => {
   const [trackSections, setTrackSections] = useState<TrackSection[]>([]);
   const [showDebug, setShowDebug] = useState<boolean>(true);
   const [lastResult, setLastResult] = useState<{win: boolean, time: number} | null>(null);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
 
   useEffect(() => {
     // Attempt to load external tuning configuration
@@ -101,6 +102,40 @@ const App: React.FC = () => {
     setSelectedTrack(null);
   };
 
+  const handleImportTracks = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const jsonString = e.target?.result as string;
+        const newSections = importTracksFromJSON(jsonString);
+        
+        if (newSections.length > 0) {
+          setTrackSections(newSections);
+          
+          // Update flat tracks array
+          const allTracks: TrackData[] = [];
+          newSections.forEach(section => allTracks.push(...section.tracks));
+          setTracks(allTracks);
+          
+          setImportMessage(`✓ Successfully imported ${allTracks.length} tracks!`);
+          setTimeout(() => setImportMessage(null), 3000);
+        } else {
+          setImportMessage('⚠ No valid tracks found in file');
+          setTimeout(() => setImportMessage(null), 3000);
+        }
+      } catch (error) {
+        console.error('Import failed:', error);
+        setImportMessage('✗ Failed to import - invalid JSON format');
+        setTimeout(() => setImportMessage(null), 3000);
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = ''; // Reset input
+  };
+
   const formatTime = (ms: number) => {
     const s = Math.floor(ms / 1000);
     const m = Math.floor(s / 60);
@@ -185,15 +220,36 @@ const App: React.FC = () => {
                   </div>
                 ))}
 
-                {/* Export Tracks Button (Debug Mode) */}
-                {showDebug && (
-                  <button
-                    onClick={() => downloadTracksJSON(trackSections)}
-                    className="w-full mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded text-sm"
-                  >
-                    EXPORT ALL TRACKS TO JSON
-                  </button>
-                )}
+                {/* Import/Export Buttons (Always Visible) */}
+                <div className="mt-6 border-t border-gray-700 pt-4">
+                  <h3 className="text-sm font-bold text-gray-400 mb-2 uppercase tracking-wider">Track Management</h3>
+                  <div className="flex gap-3">
+                    <label className="flex-1 bg-green-700 hover:bg-green-600 py-3 px-4 rounded text-sm font-bold uppercase text-center cursor-pointer transition-colors">
+                      📥 Import Tracks
+                      <input
+                        type="file"
+                        accept=".json"
+                        onChange={handleImportTracks}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      onClick={() => downloadTracksJSON(trackSections)}
+                      className="flex-1 bg-blue-700 hover:bg-blue-600 py-3 px-4 rounded text-sm font-bold uppercase transition-colors"
+                    >
+                      📤 Export Tracks
+                    </button>
+                  </div>
+                  {importMessage && (
+                    <div className={`mt-2 p-2 rounded text-sm font-medium ${
+                      importMessage.startsWith('✓') ? 'bg-green-900/50 text-green-300' :
+                      importMessage.startsWith('⚠') ? 'bg-yellow-900/50 text-yellow-300' :
+                      'bg-red-900/50 text-red-300'
+                    }`}>
+                      {importMessage}
+                    </div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="text-center py-8 text-gray-400">
