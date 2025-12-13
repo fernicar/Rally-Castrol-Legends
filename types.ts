@@ -127,7 +127,14 @@ export interface TuningConfig {
   tractionControl?: number; // Anti-wheelspin intervention (0-1)
   absEnabled?: boolean; // Anti-lock braking
   driftAssist?: number; // Helps maintain drift angle (0-1)
-  
+
+  // === GAMEPAD SETTINGS ===
+  gamepadEnabled?: boolean; // Enable/disable gamepad input
+  gamepadSteeringSensitivity?: number; // Steering sensitivity multiplier (0.5-2.0)
+  gamepadSteeringDeadzone?: number; // Deadzone for steering stick (0.0-0.3)
+  gamepadTriggerDeadzone?: number; // Deadzone for triggers (0.0-0.2)
+  gamepadVibration?: boolean; // Force feedback/vibration (future feature)
+
   // === LEGACY PARAMETERS (kept for backward compatibility) ===
   // Movement
   maxSpeed: number;
@@ -273,7 +280,14 @@ export const DEFAULT_TUNING: TuningConfig = {
   tractionControl: 0.0, // No traction control
   absEnabled: false, // No ABS
   driftAssist: 0.0, // No drift assist
-  
+
+  // === GAMEPAD SETTINGS ===
+  gamepadEnabled: true, // Gamepad input enabled by default
+  gamepadSteeringSensitivity: 1.0, // Default sensitivity
+  gamepadSteeringDeadzone: 0.15, // Standard deadzone
+  gamepadTriggerDeadzone: 0.05, // Minimal trigger deadzone
+  gamepadVibration: false, // Vibration disabled (not yet implemented)
+
   // === LEGACY PARAMETERS ===
   maxSpeed: 18,
   acceleration: 0.3,
