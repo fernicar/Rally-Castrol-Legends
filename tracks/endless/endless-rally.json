@@ -1,0 +1,30 @@
+{
+  "id": 5,
+  "name": "Endless Rally",
+  "type": "INFINITE",
+  "points": [
+    {
+      "x": -400,
+      "y": 0
+    },
+    {
+      "x": -200,
+      "y": 0
+    },
+    {
+      "x": 0,
+      "y": 0
+    },
+    {
+      "x": 200,
+      "y": 0
+    },
+    {
+      "x": 400,
+      "y": 0
+    }
+  ],
+  "controlPoints": [],
+  "width": 300,
+  "lapsToWin": 999
+}
