@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { CarState, TuningConfig, TrackData, Point, TrackType, UrbanWorldState, CityTile } from '../types';
 import { generateNextSegment } from '../services/trackService';
+import { getCarSkin } from '../services/carSkinStorage';
 import {
   createUrbanWorldState,
   updateLoadedTiles,
@@ -59,6 +60,17 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
     space: false
   });
 
+  // Biome selection for Endless Rally
+  const selectRandomBiome = () => {
+    const biomes = [
+      { name: 'GRASS', color: '#2d3728' },
+      { name: 'DIRT', color: '#c17f4a' },
+      { name: 'SAND', color: '#e8d4a0' },
+      { name: 'SNOW', color: '#f0f0f0' }
+    ];
+    return biomes[Math.floor(Math.random() * biomes.length)];
+  };
+
   const gameStateRef = useRef({
     startTime: Date.now(),
     currentLap: 1,
@@ -68,12 +80,18 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
     checkpointsCrossed: 0,
     finished: false,
     dashOffset: 0,
-    // Infinite Gen State Machine
+    // Biome for Endless Rally
+    biome: track.type === TrackType.INFINITE ? selectRandomBiome() : { name: 'GRASS', color: '#2d3728' },
+    // Enhanced Infinite Gen State Machine
     genState: {
-      mode: 'STRAIGHT' as 'STRAIGHT' | 'CURVE',
-      remainingSteps: 20,
+      mode: 'LONG_STRAIGHT' as 'LONG_STRAIGHT' | 'HAIRPIN' | 'SLIGHT_TURN_SEQUENCE',
+      remainingSteps: 60, // Start with a long straight
       targetCurvature: 0,
-      currentCurvature: 0
+      currentCurvature: 0,
+      turnSequenceCount: 0, // Counter for slight turn sequences
+      patternPhase: 0, // 0=LONG_STRAIGHT, 1=HAIRPIN, 2=LONG_STRAIGHT, 3=SLIGHT_TURN_SEQUENCE
+      cumulativeAngle: 0, // Track total angle deviation to prevent loops
+      lastHairpinDirection: 0 // Track last hairpin direction: -1=left, 1=right, 0=none
     },
     // Touge Gen State (for TOUGE mode)
     tougeState: track.type === TrackType.TOUGE ? createTougeGenState() : null,
@@ -81,7 +99,7 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
     distanceTraveled: 0
   });
 
-  // Urban state ref for Urban Freeroam mode
+  // Urban state ref for Endless Urban mode
   const urbanStateRef = useRef<UrbanWorldState | null>(null);
 
   // Initialize urban state if track type is URBAN
@@ -93,6 +111,49 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
 
   // UI State (synced less frequently if needed, but here simple enough)
   const [hud, setHud] = useState({ lap: 1, time: 0, speed: 0 });
+  
+  // Car Skin Image State
+  const [carImage, setCarImage] = useState<HTMLImageElement | null>(null);
+  
+  // Load car skin image when tuning changes
+  useEffect(() => {
+    const loadCarImage = async () => {
+      if (tuning.carSkinMode === 'image' && tuning.carSkinImage) {
+        const img = new Image();
+        
+        // Check if it's a file path or IndexedDB key
+        if (tuning.carSkinImage.startsWith('cars/')) {
+          // Load from file path (BMW default or other assets)
+          img.src = tuning.carSkinImage;
+          img.onload = () => setCarImage(img);
+          img.onerror = () => {
+            console.error('Failed to load car image from path:', tuning.carSkinImage);
+            setCarImage(null);
+          };
+        } else {
+          // Load from IndexedDB
+          try {
+            const dataUrl = await getCarSkin(tuning.carSkinImage);
+            if (dataUrl) {
+              img.src = dataUrl;
+              img.onload = () => setCarImage(img);
+              img.onerror = () => {
+                console.error('Failed to load car image from IndexedDB');
+                setCarImage(null);
+              };
+            }
+          } catch (error) {
+            console.error('Error loading car skin from IndexedDB:', error);
+            setCarImage(null);
+          }
+        }
+      } else {
+        setCarImage(null);
+      }
+    };
+    
+    loadCarImage();
+  }, [tuning.carSkinMode, tuning.carSkinImage]);
 
   // Physics Helper: Distance to Line Segment
   const distToSegment = (p: Point, v: Point, w: Point) => {
@@ -641,50 +702,122 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       // --- GAMEPLAY UPDATE ---
 
       if (track.type === TrackType.INFINITE) {
+        // === ENDLESS RALLY LOGIC ===
+        const gs = state.genState;
         const lastP = state.trackPoints[state.trackPoints.length-1];
         const distToEnd = Math.sqrt((car.x - lastP.x)**2 + (car.y - lastP.y)**2);
         
-        // Generate new track ahead
-        if (distToEnd < 4000) {
-            const gs = state.genState;
-            
+        // Calculate viewport distance (track should generate outside visible area)
+        // Approximate viewport size from car position
+        const viewportGenDistance = 2000; // Generate when track endpoint is within 2000px
+        
+        // Speed-matched generation: only generate if car is moving
+        const isMoving = car.speed > 0.5;
+        
+        // Generate new track ahead (viewport-aware and speed-matched)
+        if (distToEnd < viewportGenDistance && isMoving) {
+            // Check if we need to switch pattern phase
             if (gs.remainingSteps <= 0) {
-              // Pick new state
-              const rand = Math.random();
-              if (gs.mode === 'CURVE') {
-                // After curve, likely go straight
-                gs.mode = 'STRAIGHT';
+              // Progress through the pattern: LONG_STRAIGHT → HAIRPIN → LONG_STRAIGHT → SLIGHT_TURN_SEQUENCE
+              gs.patternPhase = (gs.patternPhase + 1) % 4;
+              
+              if (gs.patternPhase === 0 || gs.patternPhase === 2) {
+                // LONG_STRAIGHT phase
+                gs.mode = 'LONG_STRAIGHT';
                 gs.targetCurvature = 0;
-                gs.remainingSteps = 20 + Math.floor(Math.random() * 20); // Longer straights
+                gs.remainingSteps = 40 + Math.floor(Math.random() * 40); // 40-80 segments
+                gs.currentCurvature = 0;
+              } else if (gs.patternPhase === 1) {
+                // HAIRPIN phase (tight 90 degree turn, limited to prevent loops)
+                gs.mode = 'HAIRPIN';
+                
+                // ANTI-LOOP: Force direction alternation
+                let direction: number;
+                if (gs.lastHairpinDirection === 0) {
+                  // First hairpin, choose randomly
+                  direction = Math.random() > 0.5 ? 1 : -1;
+                } else {
+                  // Force opposite direction from last hairpin
+                  direction = -gs.lastHairpinDirection;
+                }
+                
+                // ANTI-LOOP: Limit hairpin to 90 degrees (π/2 radians)
+                // Using 25-35 segments with 0.04-0.05 rad/segment = ~90 degrees total
+                const segments = 25 + Math.floor(Math.random() * 10); // 25-35 segments
+                const maxAngle = Math.PI / 2; // 90 degrees in radians
+                const curvaturePerSegment = maxAngle / segments;
+                
+                gs.targetCurvature = direction * curvaturePerSegment;
+                gs.remainingSteps = segments;
+                gs.lastHairpinDirection = direction; // Remember for next hairpin
               } else {
-                // After straight, turn
-                gs.mode = 'CURVE';
+                // SLIGHT_TURN_SEQUENCE phase (3 gentle turns)
+                gs.mode = 'SLIGHT_TURN_SEQUENCE';
+                gs.turnSequenceCount = 0;
                 const direction = Math.random() > 0.5 ? 1 : -1;
-                // Harder curves: 0.05 to 0.15 radians per segment
-                gs.targetCurvature = direction * (0.05 + Math.random() * 0.1); 
-                gs.remainingSteps = 30 + Math.floor(Math.random() * 30);
+                // Gentle curvature: 0.02 to 0.04 radians per segment
+                gs.targetCurvature = direction * (0.02 + Math.random() * 0.02);
+                gs.remainingSteps = 15 + Math.floor(Math.random() * 10); // Each turn is 15-25 segments
               }
             }
 
-            // Smooth transition of curvature
-            if (gs.currentCurvature < gs.targetCurvature) gs.currentCurvature += 0.005;
-            if (gs.currentCurvature > gs.targetCurvature) gs.currentCurvature -= 0.005;
-            // Snap if close
-            if (Math.abs(gs.currentCurvature - gs.targetCurvature) < 0.005) gs.currentCurvature = gs.targetCurvature;
+            // Handle slight turn sequence progression (3 turns)
+            if (gs.mode === 'SLIGHT_TURN_SEQUENCE' && gs.remainingSteps === 0) {
+              gs.turnSequenceCount++;
+              if (gs.turnSequenceCount < 3) {
+                // Create next turn in sequence (possibly opposite direction)
+                const shouldReverse = Math.random() > 0.3; // 70% chance to continue, 30% to reverse
+                const direction = shouldReverse ? -Math.sign(gs.targetCurvature) : Math.sign(gs.targetCurvature);
+                gs.targetCurvature = direction * (0.02 + Math.random() * 0.02);
+                gs.remainingSteps = 15 + Math.floor(Math.random() * 10);
+              }
+            }
+
+            // Smooth transition of curvature for all modes
+            const curvatureTransitionSpeed = gs.mode === 'HAIRPIN' ? 0.01 : 0.005;
+            if (Math.abs(gs.currentCurvature - gs.targetCurvature) > 0.001) {
+              if (gs.currentCurvature < gs.targetCurvature) {
+                gs.currentCurvature += curvatureTransitionSpeed;
+              } else {
+                gs.currentCurvature -= curvatureTransitionSpeed;
+              }
+            } else {
+              gs.currentCurvature = gs.targetCurvature;
+            }
+
+            // ANTI-LOOP: Decay cumulative angle during straights
+            if (gs.mode === 'LONG_STRAIGHT') {
+              // Gradually reset cumulative angle toward zero during straights
+              const decayRate = 0.01; // Decay 0.01 radians per segment
+              if (Math.abs(gs.cumulativeAngle) > decayRate) {
+                gs.cumulativeAngle -= Math.sign(gs.cumulativeAngle) * decayRate;
+              } else {
+                gs.cumulativeAngle = 0;
+              }
+            }
 
             // Calculate current track angle
             const prevP = state.trackPoints[state.trackPoints.length-2];
             const currentAngle = Math.atan2(lastP.y - prevP.y, lastP.x - prevP.x);
             
-            // Add segment
-            const newP = generateNextSegment(lastP, currentAngle + gs.currentCurvature, 60);
+            // Add segment with current curvature
+            const segmentLength = 60;
+            const newP = generateNextSegment(lastP, currentAngle + gs.currentCurvature, segmentLength);
             state.trackPoints.push(newP);
             gs.remainingSteps--;
+            
+            // ANTI-LOOP: Track cumulative angle change
+            gs.cumulativeAngle += gs.currentCurvature;
         }
         
-        // Remove old track points to manage memory ("forgetting" old track)
-        // AND Update dashed line offset to avoid glitching
-        if (state.trackPoints.length > 400) {
+        // Speed-matched removal: remove track behind car based on distance
+        const firstP = state.trackPoints[0];
+        const distFromStart = Math.sqrt((car.x - firstP.x)**2 + (car.y - firstP.y)**2);
+        
+        // Remove old segments when they're far behind AND outside viewport
+        const removalDistance = 1500; // Remove when 1500px behind car
+        
+        if (state.trackPoints.length > 300 && distFromStart > removalDistance) {
             const p0 = state.trackPoints[0];
             const p1 = state.trackPoints[1];
             // Calculate distance of the segment being removed
@@ -827,8 +960,14 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
 
       // --- RENDERING ---
 
-      // Clear
-      ctx.fillStyle = track.type === TrackType.URBAN ? '#3d5c3d' : '#2d3728'; // Grass color
+      // Clear with biome-appropriate background color
+      let bgColor = '#2d3728'; // Default grass
+      if (track.type === TrackType.URBAN) {
+        bgColor = '#3d5c3d'; // Urban grass
+      } else if (track.type === TrackType.INFINITE) {
+        bgColor = state.biome.color; // Use randomly selected biome for Endless Rally
+      }
+      ctx.fillStyle = bgColor;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       // Camera Follow
@@ -1104,7 +1243,7 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
         }
       }
 
-      // 2. Draw Car (Toyota Celica Castrol Style)
+      // 2. Draw Car
       ctx.translate(car.x, car.y);
       ctx.rotate(car.angle);
       
@@ -1112,78 +1251,91 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       const carModelScale = tuning.carScale || 4;
       ctx.scale(carModelScale, carModelScale);
 
-      // Shadow
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(-18, -8, 36, 16);
+      // Check if we're using image mode and have an image loaded
+      if (tuning.carSkinMode === 'image' && carImage) {
+        // IMAGE MODE: Render PNG car skin
+        const rotationOffset = (tuning.carSkinRotationOffset || 0) * (Math.PI / 180);
+        ctx.rotate(rotationOffset);
+        
+        // Calculate size (scale down from 1024x1024 to fit)
+        const imgSize = 32; // Base size for car
+        ctx.drawImage(carImage, -imgSize / 2, -imgSize / 2, imgSize, imgSize);
+      } else {
+        // VECTOR MODE: Classic Castrol livery car
+        
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(-18, -8, 36, 16);
 
-      // Wheels
-      ctx.fillStyle = '#111';
-      ctx.save();
-      ctx.translate(14, -10);
-      ctx.rotate(car.steeringAngle);
-      ctx.fillRect(-4, -2, 8, 4);
-      ctx.restore();
-      
-      ctx.save();
-      ctx.translate(14, 10);
-      ctx.rotate(car.steeringAngle);
-      ctx.fillRect(-4, -2, 8, 4);
-      ctx.restore();
+        // Wheels
+        ctx.fillStyle = '#111';
+        ctx.save();
+        ctx.translate(14, -10);
+        ctx.rotate(car.steeringAngle);
+        ctx.fillRect(-4, -2, 8, 4);
+        ctx.restore();
+        
+        ctx.save();
+        ctx.translate(14, 10);
+        ctx.rotate(car.steeringAngle);
+        ctx.fillRect(-4, -2, 8, 4);
+        ctx.restore();
 
-      ctx.fillRect(-14, -12, 8, 4);
-      ctx.fillRect(-14, 8, 8, 4);
+        ctx.fillRect(-14, -12, 8, 4);
+        ctx.fillRect(-14, 8, 8, 4);
 
-      // Body (White)
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.moveTo(20, 0); 
-      ctx.lineTo(15, -10); 
-      ctx.lineTo(-18, -10); 
-      ctx.lineTo(-20, -5); 
-      ctx.lineTo(-20, 5); 
-      ctx.lineTo(-18, 10); 
-      ctx.lineTo(15, 10); 
-      ctx.closePath();
-      ctx.fill();
+        // Body (White)
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(20, 0); 
+        ctx.lineTo(15, -10); 
+        ctx.lineTo(-18, -10); 
+        ctx.lineTo(-20, -5); 
+        ctx.lineTo(-20, 5); 
+        ctx.lineTo(-18, 10); 
+        ctx.lineTo(15, 10); 
+        ctx.closePath();
+        ctx.fill();
 
-      // Castrol Livery (Red/Green Swooshes)
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#d40000';
-      ctx.beginPath();
-      ctx.moveTo(-15, -10);
-      ctx.quadraticCurveTo(0, -5, 15, -2);
-      ctx.stroke();
-      
-      ctx.strokeStyle = '#00853f';
-      ctx.beginPath();
-      ctx.moveTo(-15, 10);
-      ctx.quadraticCurveTo(0, 5, 15, 2);
-      ctx.stroke();
+        // Castrol Livery (Red/Green Swooshes)
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = '#d40000';
+        ctx.beginPath();
+        ctx.moveTo(-15, -10);
+        ctx.quadraticCurveTo(0, -5, 15, -2);
+        ctx.stroke();
+        
+        ctx.strokeStyle = '#00853f';
+        ctx.beginPath();
+        ctx.moveTo(-15, 10);
+        ctx.quadraticCurveTo(0, 5, 15, 2);
+        ctx.stroke();
 
-      // Spoiler
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(-22, -10, 4, 20);
-      ctx.fillStyle = '#d40000';
-      ctx.fillRect(-22, -10, 4, 5);
-      ctx.fillRect(-22, 5, 4, 5);
+        // Spoiler
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(-22, -10, 4, 20);
+        ctx.fillStyle = '#d40000';
+        ctx.fillRect(-22, -10, 4, 5);
+        ctx.fillRect(-22, 5, 4, 5);
 
-      // Windshield
-      ctx.fillStyle = '#1a2b3c';
-      ctx.beginPath();
-      ctx.moveTo(5, -7);
-      ctx.lineTo(-5, -8);
-      ctx.lineTo(-5, 8);
-      ctx.lineTo(5, 7);
-      ctx.fill();
+        // Windshield
+        ctx.fillStyle = '#1a2b3c';
+        ctx.beginPath();
+        ctx.moveTo(5, -7);
+        ctx.lineTo(-5, -8);
+        ctx.lineTo(-5, 8);
+        ctx.lineTo(5, 7);
+        ctx.fill();
 
-      // Brake Lights
-      if (inputs.down && car.speed > 0.1) {
-        ctx.fillStyle = '#ff0000';
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = '#ff0000';
-        ctx.fillRect(-21, -8, 2, 4);
-        ctx.fillRect(-21, 4, 2, 4);
-        ctx.shadowBlur = 0;
+        // Brake Lights
+        if (inputs.down && car.speed > 0.1) {
+          ctx.fillStyle = '#ff0000';
+          ctx.shadowBlur = 10;
+          ctx.shadowColor = '#ff0000';
+          ctx.fillRect(-21, -8, 2, 4);
+          ctx.fillRect(-21, 4, 2, 4);
+          ctx.shadowBlur = 0;
+        }
       }
       
       ctx.restore(); // Undo camera translation

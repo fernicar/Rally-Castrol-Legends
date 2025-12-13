@@ -33,6 +33,12 @@ export interface TrackData {
   lapsToWin: number;
 }
 
+export interface TrackSection {
+  title: string;
+  description?: string;
+  tracks: TrackData[];
+}
+
 export interface CarState {
   // Position
   x: number;
@@ -145,6 +151,11 @@ export interface TuningConfig {
 
   // Visuals
   carScale: number;
+  
+  // Car Skin System
+  carSkinMode?: 'vector' | 'image';
+  carSkinImage?: string | null;
+  carSkinRotationOffset?: number;
 }
 
 // === URBAN FREEROAM MODE TYPES ===
@@ -276,5 +287,10 @@ export const DEFAULT_TUNING: TuningConfig = {
   corneringStiffness: 0.12,
   offRoadFriction: 0.15,
   cameraSmoothness: 0.1,
-  carScale: 4
+  carScale: 4,
+  
+  // === CAR SKIN SYSTEM ===
+  carSkinMode: 'image', // Default to BMW skin
+  carSkinImage: 'cars/bmw/bmw.png', // Path to BMW asset
+  carSkinRotationOffset: 270 // BMW faces down (South), needs 270° to align with game's East (0°)
 };

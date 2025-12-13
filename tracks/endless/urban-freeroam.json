@@ -1,0 +1,14 @@
+{
+  "id": 6,
+  "name": "Endless Urban",
+  "type": "URBAN",
+  "points": [
+    {
+      "x": 400,
+      "y": 400
+    }
+  ],
+  "controlPoints": [],
+  "width": 200,
+  "lapsToWin": 999
+}

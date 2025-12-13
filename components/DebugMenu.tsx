@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { TuningConfig, DEFAULT_TUNING, TrackData } from '../types';
+import { saveCarSkin, validateImageFile, fileToBlob } from '../services/carSkinStorage';
 
 interface DebugMenuProps {
   config: TuningConfig;
@@ -120,6 +121,143 @@ const DebugMenu: React.FC<DebugMenuProps> = ({ config, onConfigChange, tracks, o
           <label className="text-gray-400 block">Car Scale (x{config.carScale})</label>
           <input type="range" min="1" max="4" step="0.1" 
             value={config.carScale || 4} onChange={(e) => handleChange('carScale', e.target.value)} className="w-full accent-green-500"/>
+        </div>
+
+        {/* CAR APPEARANCE */}
+        <div className="bg-gradient-to-r from-blue-900/30 to-purple-900/30 p-3 rounded my-4 border border-blue-500/30">
+          <h3 className="text-white font-bold mb-3 text-center">🚗 CAR APPEARANCE</h3>
+          
+          {/* Mode Selector */}
+          <div className="space-y-2 mb-3">
+            <label className="text-gray-300 block font-semibold">Car Skin Mode</label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onConfigChange({ ...config, carSkinMode: 'vector' })}
+                className={`flex-1 py-2 px-3 rounded text-xs font-bold uppercase transition-colors ${
+                  config.carSkinMode === 'vector'
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                }`}
+              >
+                🎨 Vector Car
+              </button>
+              <button
+                onClick={() => onConfigChange({ ...config, carSkinMode: 'image' })}
+                className={`flex-1 py-2 px-3 rounded text-xs font-bold uppercase transition-colors ${
+                  config.carSkinMode === 'image'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                }`}
+              >
+                🖼️ Image Skin
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 italic">
+              {config.carSkinMode === 'vector' ? 'Using classic Castrol livery' : 'Using custom PNG image'}
+            </p>
+          </div>
+
+          {/* Image Mode Controls */}
+          {config.carSkinMode === 'image' && (
+            <>
+              {/* Rotation Offset Selector */}
+              <div className="space-y-2 mb-3">
+                <label className="text-gray-300 block font-semibold">
+                  Image Rotation Offset ({config.carSkinRotationOffset || 0}°)
+                </label>
+                <select
+                  value={config.carSkinRotationOffset || 0}
+                  onChange={(e) => onConfigChange({ ...config, carSkinRotationOffset: parseInt(e.target.value) })}
+                  className="w-full bg-gray-700 text-white px-3 py-2 rounded border border-gray-600 focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="0">0° - East (Right) ➡️</option>
+                  <option value="90">90° - South (Down) ⬇️</option>
+                  <option value="180">180° - West (Left) ⬅️</option>
+                  <option value="270">270° - North (Up) ⬆️</option>
+                </select>
+                <p className="text-xs text-gray-400">
+                  Select the direction your car image faces
+                </p>
+              </div>
+
+              {/* File Upload */}
+              <div className="space-y-2 mb-3">
+                <label className="text-gray-300 block font-semibold">Upload Custom Skin</label>
+                <label className="block">
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg,image/webp"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const validation = validateImageFile(file);
+                        if (!validation.valid) {
+                          alert(validation.error);
+                          return;
+                        }
+                        try {
+                          const id = `custom_${Date.now()}`;
+                          await saveCarSkin(id, file);
+                          onConfigChange({
+                            ...config,
+                            carSkinMode: 'image',
+                            carSkinImage: id
+                          });
+                          alert('Custom skin uploaded successfully!');
+                        } catch (error) {
+                          console.error('Upload failed:', error);
+                          alert('Failed to upload skin');
+                        }
+                      }
+                      e.target.value = ''; // Reset input
+                    }}
+                    className="hidden"
+                  />
+                  <div className="bg-gray-700 hover:bg-gray-600 text-white py-2 px-4 rounded text-center cursor-pointer transition-colors">
+                    📁 Choose PNG File
+                  </div>
+                </label>
+                <p className="text-xs text-gray-400">
+                  Max 10MB • PNG, JPG, or WebP
+                </p>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="space-y-2">
+                <label className="text-gray-300 block font-semibold">Quick Actions</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => onConfigChange({
+                      ...config,
+                      carSkinMode: 'image',
+                      carSkinImage: 'cars/bmw/bmw.png',
+                      carSkinRotationOffset: 270
+                    })}
+                    className="bg-blue-700 hover:bg-blue-600 py-2 px-3 rounded text-xs font-bold uppercase transition-colors"
+                  >
+                    🏎️ BMW Default
+                  </button>
+                  <button
+                    onClick={() => onConfigChange({
+                      ...config,
+                      carSkinMode: 'vector'
+                    })}
+                    className="bg-green-700 hover:bg-green-600 py-2 px-3 rounded text-xs font-bold uppercase transition-colors"
+                  >
+                    🎨 Classic Vector
+                  </button>
+                </div>
+              </div>
+
+              {/* Current Skin Info */}
+              {config.carSkinImage && (
+                <div className="mt-3 p-2 bg-gray-800 rounded text-xs">
+                  <strong className="text-gray-300">Active Skin:</strong>
+                  <p className="text-gray-400 truncate">{config.carSkinImage}</p>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {/* PHASE 1: MASS & INERTIA */}

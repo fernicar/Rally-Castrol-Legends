@@ -2,14 +2,16 @@ import React, { useState, useEffect } from 'react';
 import GameEngine from './components/GameEngine';
 import DebugMenu from './components/DebugMenu';
 import TrackEditor from './components/TrackEditor';
-import { GameMode, TrackData, TuningConfig, DEFAULT_TUNING, TrackType } from './types';
+import { GameMode, TrackData, TuningConfig, DEFAULT_TUNING, TrackType, TrackSection } from './types';
 import { TRACKS as INITIAL_TRACKS } from './services/trackService';
+import { loadTrackSections, importTracksFromJSON, downloadTracksJSON } from './services/trackLoader';
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<GameMode>(GameMode.MENU);
   const [selectedTrack, setSelectedTrack] = useState<TrackData | null>(null);
   const [tuning, setTuning] = useState<TuningConfig>(DEFAULT_TUNING);
   const [tracks, setTracks] = useState<TrackData[]>(INITIAL_TRACKS);
+  const [trackSections, setTrackSections] = useState<TrackSection[]>([]);
   const [showDebug, setShowDebug] = useState<boolean>(true);
   const [lastResult, setLastResult] = useState<{win: boolean, time: number} | null>(null);
 
@@ -28,18 +30,40 @@ const App: React.FC = () => {
         console.log('Using default tuning');
       });
 
-    // Attempt to load external track configuration
-    fetch('rally_tracks.json')
-      .then(res => {
-        if(res.ok) return res.json();
-        throw new Error('No external tracks');
+    // Load tracks from modular structure
+    loadTrackSections()
+      .then(sections => {
+        console.log('Loaded track sections:', sections);
+        setTrackSections(sections);
+
+        // Also maintain flat tracks array for backwards compatibility
+        const allTracks: TrackData[] = [];
+        sections.forEach(section => allTracks.push(...section.tracks));
+        setTracks(allTracks);
       })
-      .then(data => {
-        console.log('Loaded custom tracks:', data);
-        setTracks(data);
-      })
-      .catch(e => {
-        console.log('Using default tracks');
+      .catch(error => {
+        console.error('Failed to load track sections, trying legacy format:', error);
+
+        // Fallback to legacy rally_tracks.json
+        fetch('rally_tracks.json')
+          .then(res => {
+            if(res.ok) return res.json();
+            throw new Error('No external tracks');
+          })
+          .then(data => {
+            console.log('Loaded tracks from legacy file:', data);
+            setTracks(data);
+
+            // Convert to sections
+            const sections = importTracksFromJSON(JSON.stringify(data));
+            setTrackSections(sections);
+          })
+          .catch(e => {
+            console.log('Using default tracks');
+            // Convert default tracks to sections
+            const sections = importTracksFromJSON(JSON.stringify(INITIAL_TRACKS));
+            setTrackSections(sections);
+          });
       });
   }, []);
 
@@ -115,38 +139,67 @@ const App: React.FC = () => {
             </h1>
             <p className="text-gray-400 mb-8 uppercase tracking-widest text-sm">Physics Based Top-Down Racing</p>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {tracks.map(track => (
-                <div key={track.id} className="relative group">
-                  <button 
-                    onClick={() => startGame(track)}
-                    className="w-full text-left relative overflow-hidden bg-neutral-800 hover:bg-neutral-700 border border-neutral-600 hover:border-white p-4 rounded transition-all duration-200"
+            {trackSections.length > 0 ? (
+              <div className="space-y-6">
+                {trackSections.map((section, sectionIdx) => (
+                  <div key={sectionIdx} className="space-y-3">
+                    <div className="border-l-4 border-red-600 pl-3">
+                      <h2 className="text-2xl font-bold text-white">{section.title}</h2>
+                      {section.description && (
+                        <p className="text-sm text-gray-400">{section.description}</p>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {section.tracks.map(track => (
+                        <div key={track.id} className="relative group">
+                          <button
+                            onClick={() => startGame(track)}
+                            className="w-full text-left relative overflow-hidden bg-neutral-800 hover:bg-neutral-700 border border-neutral-600 hover:border-white p-4 rounded transition-all duration-200"
+                          >
+                            <div className="absolute inset-0 bg-gradient-to-r from-red-900/20 to-green-900/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <h3 className="text-xl font-bold relative z-10">{track.name}</h3>
+                            <p className="text-xs text-gray-400 relative z-10">
+                              {track.type === TrackType.INFINITE
+                                ? '∞ PROCEDURAL'
+                                : track.type === TrackType.URBAN
+                                  ? '🏙️ OPEN WORLD'
+                                  : track.type === TrackType.TOUGE
+                                    ? '⛰️ DOWNHILL TOUGE'
+                                    : `${track.lapsToWin} LAPS • TECHNICAL`}
+                            </p>
+                          </button>
+
+                          {/* EDIT BUTTON (Only for loop tracks in debug mode) */}
+                          {showDebug && track.type === TrackType.LOOP && (
+                            <button
+                              onClick={(e) => startEditor(track, e)}
+                              className="absolute top-2 right-2 z-20 bg-yellow-600 hover:bg-yellow-500 text-black font-bold text-xs px-2 py-1 rounded shadow-lg opacity-80 hover:opacity-100"
+                            >
+                              EDIT
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                {/* Export Tracks Button (Debug Mode) */}
+                {showDebug && (
+                  <button
+                    onClick={() => downloadTracksJSON(trackSections)}
+                    className="w-full mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded text-sm"
                   >
-                    <div className="absolute inset-0 bg-gradient-to-r from-red-900/20 to-green-900/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-                    <h3 className="text-xl font-bold relative z-10">{track.name}</h3>
-                    <p className="text-xs text-gray-400 relative z-10">
-                      {track.type === TrackType.INFINITE
-                        ? '∞ PROCEDURAL'
-                        : track.type === TrackType.URBAN
-                          ? '🏙️ OPEN WORLD'
-                          : track.type === TrackType.TOUGE
-                            ? '⛰️ DOWNHILL TOUGE'
-                            : `${track.lapsToWin} LAPS • TECHNICAL`}
-                    </p>
+                    EXPORT ALL TRACKS TO JSON
                   </button>
-                  
-                  {/* EDIT BUTTON (Only for loop tracks in debug mode) */}
-                  {showDebug && track.type === TrackType.LOOP && (
-                    <button 
-                      onClick={(e) => startEditor(track, e)}
-                      className="absolute top-2 right-2 z-20 bg-yellow-600 hover:bg-yellow-500 text-black font-bold text-xs px-2 py-1 rounded shadow-lg opacity-80 hover:opacity-100"
-                    >
-                      EDIT
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-400">
+                Loading tracks...
+              </div>
+            )}
             
             <div className="mt-8 text-xs text-gray-500">
               WASD / ARROWS to Drive • SPACE to Drift (Handbrake)
