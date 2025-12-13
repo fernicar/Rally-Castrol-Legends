@@ -123,6 +123,32 @@ export const TRACKS: TrackData[] = [
   { id: 4, name: "Hairpin Valley", type: TrackType.LOOP, points: generateTrackPoints(track4Controls), controlPoints: track4Controls, width: TRACK_WIDTH, lapsToWin: 2 },
   // Infinite start points (straight line to begin)
   { id: 5, name: "Endless Rally", type: TrackType.INFINITE, points: [{x: -400, y: 0}, {x: -200, y: 0}, {x: 0, y: 0}, {x: 200, y: 0}, {x: 400, y: 0}], controlPoints: [], width: TRACK_WIDTH, lapsToWin: 999 },
+  // Urban Freeroam (ID 6)
+  { id: 6, name: "Urban Freeroam", type: TrackType.URBAN, points: [{ x: 400, y: 400 }], controlPoints: [], width: 200, lapsToWin: 999 },
+  // Endless Touge (ID 7)
+  {
+    id: 7,
+    name: "Endless Touge",
+    type: TrackType.TOUGE,
+    points: [
+      { x: 400, y: 500 },
+      { x: 400, y: 450 },
+      { x: 400, y: 400 },
+      { x: 400, y: 350 },
+      { x: 400, y: 300 },
+      { x: 400, y: 250 },
+      { x: 400, y: 200 },
+      { x: 400, y: 150 },
+      { x: 400, y: 100 },
+      { x: 400, y: 50 },
+      { x: 400, y: 0 },
+      { x: 400, y: -50 },
+      { x: 400, y: -100 },
+    ],
+    controlPoints: [],
+    width: 280,
+    lapsToWin: 999
+  },
 ];
 
 export const generateNextSegment = (lastPoint: Point, angle: number, length: number): Point => {

@@ -1,6 +1,20 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { CarState, TuningConfig, TrackData, Point, TrackType } from '../types';
+import { CarState, TuningConfig, TrackData, Point, TrackType, UrbanWorldState, CityTile } from '../types';
 import { generateNextSegment } from '../services/trackService';
+import {
+  createUrbanWorldState,
+  updateLoadedTiles,
+  isPositionOnRoad,
+  findNearestRoadPosition,
+  TILE_SIZE,
+  ROAD_WIDTH
+} from '../services/urbanGenerator';
+import {
+  createTougeGenState,
+  generateTougeSegment,
+  TougeGenState,
+  TOUGE_CONFIG
+} from '../services/tougeGenerator';
 
 interface GameEngineProps {
   track: TrackData;
@@ -13,11 +27,17 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
   // Game State Refs (Mutable for loop performance)
+  const initialPos = track.type === TrackType.URBAN
+    ? { x: TILE_SIZE / 2, y: TILE_SIZE / 2 } // Urban mode spawns at center of tile (0,0)
+    : track.type === TrackType.TOUGE
+      ? { x: track.points[5]?.x || 400, y: track.points[5]?.y || 0 } // Touge starts mid-track
+      : { x: track.points[1]?.x || 0, y: track.points[1]?.y || 0 }; // Other modes use point 1
+
   const carRef = useRef<CarState>({
-    x: track.points[1].x, // Start at index 1 (0,0) usually, index 0 is lead-in
-    y: track.points[1].y,
+    x: initialPos.x,
+    y: initialPos.y,
     speed: 0,
-    angle: 0, // Facing East initially
+    angle: track.type === TrackType.TOUGE ? -Math.PI / 2 : 0, // Touge faces up, others face East
     velocity: { x: 0, y: 0 },
     steeringAngle: 0,
     angularVelocity: 0, // Phase 1: rotation rate
@@ -54,8 +74,22 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       remainingSteps: 20,
       targetCurvature: 0,
       currentCurvature: 0
-    }
+    },
+    // Touge Gen State (for TOUGE mode)
+    tougeState: track.type === TrackType.TOUGE ? createTougeGenState() : null,
+    // Distance traveled (for scoring in Touge mode)
+    distanceTraveled: 0
   });
+
+  // Urban state ref for Urban Freeroam mode
+  const urbanStateRef = useRef<UrbanWorldState | null>(null);
+
+  // Initialize urban state if track type is URBAN
+  useEffect(() => {
+    if (track.type === TrackType.URBAN) {
+      urbanStateRef.current = createUrbanWorldState();
+    }
+  }, [track.type]);
 
   // UI State (synced less frequently if needed, but here simple enough)
   const [hud, setHud] = useState({ lap: 1, time: 0, speed: 0 });
@@ -408,15 +442,47 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       car.x += car.velocity.x;
       car.y += car.velocity.y;
 
-      // 7. Friction & Drag & Offroad
-      
-      // Detect Offroad
-      let minDist = Infinity;
-      // Optimize: For infinite, check end of array. For Loop, check window around current checkpoint.
-      let pointsToCheck: Point[] = [];
-      let checkStartIndex = 0;
+      // Urban Mode: Road Boundary Collision
+      if (track.type === TrackType.URBAN && urbanStateRef.current) {
+        const urbanState = urbanStateRef.current;
 
-      if (track.type === TrackType.INFINITE) {
+        // Update loaded tiles
+        updateLoadedTiles(car.x, car.y, urbanState);
+
+        // Road boundary collision
+        if (!isPositionOnRoad(car.x, car.y, urbanState)) {
+          const nearestRoad = findNearestRoadPosition(car.x, car.y, urbanState);
+          const pushDir = {
+            x: nearestRoad.x - car.x,
+            y: nearestRoad.y - car.y
+          };
+          const dist = Math.sqrt(pushDir.x ** 2 + pushDir.y ** 2);
+
+          if (dist > 1) {
+            // Push car back toward road
+            const pushStrength = 0.3;
+            car.velocity.x += (pushDir.x / dist) * pushStrength;
+            car.velocity.y += (pushDir.y / dist) * pushStrength;
+
+            // Reduce speed (curb friction)
+            car.velocity.x *= 0.85;
+            car.velocity.y *= 0.85;
+          }
+        }
+      }
+
+      // 7. Friction & Drag & Offroad
+
+      // Detect Offroad (skip for urban mode)
+      let minDist = Infinity;
+      let isOffroad = false;
+
+      if (track.type !== TrackType.URBAN) {
+        // Optimize: For infinite, check end of array. For Loop, check window around current checkpoint.
+        let pointsToCheck: Point[] = [];
+        let checkStartIndex = 0;
+
+        if (track.type === TrackType.INFINITE) {
         // Just check the last 40 points in the buffer for offroad collision
         // This assumes the car is roughly keeping up
         pointsToCheck = state.trackPoints;
@@ -442,23 +508,25 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
           
           const p1 = state.trackPoints[idx];
           const p2 = state.trackPoints[(idx + 1) % totalPoints];
-          
-          // Infinite track doesn't wrap last to first
-          if (track.type === TrackType.INFINITE && idx === totalPoints - 1) continue;
+
+          // Infinite and Touge tracks don't wrap last to first
+          if ((track.type === TrackType.INFINITE || track.type === TrackType.TOUGE) && idx === totalPoints - 1) continue;
 
           const d = distToSegment(car, p1, p2);
           if (d < minDist) minDist = d;
       }
       
-      // Fallback: if we are lost (minDist still Infinity), check everything
-      if (minDist === Infinity) {
-          for (let i = 0; i < state.trackPoints.length - 1; i++) {
-             const d = distToSegment(car, state.trackPoints[i], state.trackPoints[i+1]);
-             if (d < minDist) minDist = d;
-          }
+        // Fallback: if we are lost (minDist still Infinity), check everything
+        if (minDist === Infinity) {
+            for (let i = 0; i < state.trackPoints.length - 1; i++) {
+               const d = distToSegment(car, state.trackPoints[i], state.trackPoints[i+1]);
+               if (d < minDist) minDist = d;
+            }
+        }
+
+        isOffroad = minDist > (track.width / 2);
       }
-      
-      const isOffroad = minDist > (track.width / 2);
+
       const currentFriction = isOffroad ? tuning.offRoadFriction : tuning.friction;
 
       // Recalculate speed after braking (before applying friction/drag)
@@ -651,10 +719,69 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
             state.lastCheckpointIndex = bestIdx;
         }
 
-      } else {
+      } else if (track.type === TrackType.TOUGE && state.tougeState) {
+        // === TOUGE LOGIC ===
+        // Since we're driving upward (negative Y), we generate track at the front (index 0)
+        // and remove track at the back (last index)
+        const tougeState = state.tougeState;
+
+        // Generate new track ahead (at the front when car is within 3000px)
+        let generatedCount = 0;
+        while (generatedCount < 200) { // Generate up to 200 segments per frame
+          const firstP = state.trackPoints[0];
+          const distToFront = Math.sqrt((car.x - firstP.x) ** 2 + (car.y - firstP.y) ** 2);
+
+          // Stop if we have enough track ahead
+          if (distToFront >= 3000 && state.trackPoints.length >= 100) break;
+
+          const currentFirstPoint = state.trackPoints[0];
+          const result = generateTougeSegment(currentFirstPoint, tougeState);
+          state.trackPoints.unshift(result.point); // Add to front
+          state.tougeState = result.state;
+          state.lastCheckpointIndex++; // Adjust index since we added at front
+
+          generatedCount++;
+
+          // Safety: don't generate infinite in one frame
+          if (state.trackPoints.length > 500) break;
+        }
+
+        // Remove old track points (behind the car at the end of the array)
+        const lastP = state.trackPoints[state.trackPoints.length - 1];
+        const distFromEnd = Math.sqrt((car.x - lastP.x) ** 2 + (car.y - lastP.y) ** 2);
+
+        if (state.trackPoints.length > 300 && distFromEnd > 2000) {
+          const p0 = state.trackPoints[state.trackPoints.length - 1];
+          const p1 = state.trackPoints[state.trackPoints.length - 2];
+          const dist = Math.sqrt((p1.x - p0.x) ** 2 + (p1.y - p0.y) ** 2);
+
+          state.dashOffset = (state.dashOffset + dist) % 40;
+          state.trackPoints.pop(); // Remove from end
+          state.distanceTraveled += dist;
+        }
+
+        // Update checkpoint progress (find closest point ahead - toward front of array)
+        let bestIdx = -1;
+        let bestDist = Infinity;
+        for (let i = 0; i < 50; i++) {
+          const idx = state.lastCheckpointIndex - i; // Look backward in array (ahead in direction)
+          if (idx < 0) break;
+          const p = state.trackPoints[idx];
+          const d = (car.x - p.x) ** 2 + (car.y - p.y) ** 2;
+          if (d < bestDist) {
+            bestDist = d;
+            bestIdx = idx;
+          }
+        }
+
+        if (bestIdx >= 0 && bestIdx < state.lastCheckpointIndex) {
+          state.lastCheckpointIndex = bestIdx;
+        }
+
+      } else if (track.type === TrackType.LOOP) {
         // LOOP LOGIC
         // Scan a window ahead of current checkpoint to find closer points
-        const searchWindow = 50; 
+        const searchWindow = 50;
         let bestIdx = -1;
         let minD = Infinity;
 
@@ -667,14 +794,14 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
               bestIdx = idx;
            }
         }
-        
+
         const currentP = state.trackPoints[state.lastCheckpointIndex];
         const currentD = (car.x - currentP.x)**2 + (car.y - currentP.y)**2;
-        
+
         if (minD < currentD && minD < (track.width * 1.5)**2) {
              let advance = bestIdx - state.lastCheckpointIndex;
-             if (advance < 0) advance += state.trackPoints.length; 
-             
+             if (advance < 0) advance += state.trackPoints.length;
+
              if (advance > 0 && advance < searchWindow) {
                  if (state.lastCheckpointIndex > state.trackPoints.length - searchWindow && bestIdx < searchWindow) {
                      state.currentLap++;
@@ -682,12 +809,13 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
                  state.lastCheckpointIndex = bestIdx;
              }
         }
-        
+
         if (state.currentLap > track.lapsToWin) {
             state.finished = true;
             onFinish(true, Date.now() - state.startTime);
         }
       }
+      // URBAN mode has no gameplay logic (freeroam)
 
       if (Math.random() > 0.8) {
         setHud({
@@ -698,9 +826,9 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       }
 
       // --- RENDERING ---
-      
+
       // Clear
-      ctx.fillStyle = '#2d3728'; // Dark grass color
+      ctx.fillStyle = track.type === TrackType.URBAN ? '#3d5c3d' : '#2d3728'; // Grass color
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       // Camera Follow
@@ -708,68 +836,272 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.translate(-car.x, -car.y);
 
-      // 1. Draw Track
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      
-      // Road Border
-      ctx.lineWidth = track.width + 20;
-      ctx.strokeStyle = '#5c4e38'; // Dirt/Gravel border
-      ctx.beginPath();
-      const drawPoints = state.trackPoints;
-      ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
-      for (let i = 1; i < drawPoints.length; i++) {
-        ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
-      }
-      if (track.type === TrackType.LOOP) ctx.closePath();
-      ctx.stroke();
+      // 1. Draw Track or Urban World
+      if (track.type === TrackType.URBAN && urbanStateRef.current) {
+        // Urban rendering
+        const URBAN_COLORS = {
+          ROAD_ASPHALT: '#4a4a4a',
+          ROAD_MARKING_WHITE: '#ffffff',
+          SIDEWALK: '#8b8b8b',
+          GRASS: '#3d5c3d',
+          SHADOW: 'rgba(0,0,0,0.3)'
+        };
 
-      // Road Surface
-      ctx.lineWidth = track.width;
-      ctx.strokeStyle = '#808080'; // Asphalt
-      ctx.stroke();
+        // Render all loaded tiles
+        for (const [key, tile] of urbanStateRef.current.loadedTiles) {
+          const [gx, gy] = key.split(',').map(Number);
+          const worldX = gx * TILE_SIZE;
+          const worldY = gy * TILE_SIZE;
 
-      // Center Line
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.setLineDash([20, 20]);
-      if (track.type === TrackType.INFINITE) {
-        ctx.lineDashOffset = -state.dashOffset;
-      }
-      ctx.beginPath();
-      ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
-      for (let i = 1; i < drawPoints.length; i++) {
-        ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
-      }
-      if (track.type === TrackType.LOOP) ctx.closePath();
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.lineDashOffset = 0;
+          // Only render tiles visible on screen (optimization)
+          const screenX = worldX - car.x + canvas.width / 2;
+          const screenY = worldY - car.y + canvas.height / 2;
+          if (
+            screenX + TILE_SIZE < 0 || screenX > canvas.width ||
+            screenY + TILE_SIZE < 0 || screenY > canvas.height
+          ) continue;
 
-      // Start/Finish Line
-      if (track.type === TrackType.LOOP) {
-          ctx.save();
-          // We expect index 1 to be (0,0) or start, index 0 is lead-in.
-          // Let's assume the start line is between point 1 and 2
-          const startIdx = 1;
-          if (drawPoints.length > startIdx + 1) {
-              const pStart = drawPoints[startIdx];
-              const pNext = drawPoints[startIdx+1];
-              
-              ctx.translate(pStart.x, pStart.y);
-              const angle = Math.atan2(pNext.y - pStart.y, pNext.x - pStart.x);
-              ctx.rotate(angle);
-              
-              // Checkered Line
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(-10, -track.width/2, 20, track.width);
-              ctx.fillStyle = '#000000';
-              for(let i=0; i<10; i++) {
-                if(i%2===0) ctx.fillRect(-10, -track.width/2 + i*(track.width/10), 10, track.width/10);
-                else ctx.fillRect(0, -track.width/2 + i*(track.width/10), 10, track.width/10);
-              }
+          // 1. Road surfaces
+          ctx.fillStyle = URBAN_COLORS.ROAD_ASPHALT;
+          for (const zone of tile.roadZones) {
+            ctx.fillRect(
+              worldX + zone.x,
+              worldY + zone.y,
+              zone.width,
+              zone.height
+            );
+
+            // Sidewalks on each side
+            ctx.fillStyle = URBAN_COLORS.SIDEWALK;
+
+            // Determine sidewalk placement based on zone orientation
+            if (zone.height > zone.width) {
+              // Vertical road - sidewalks on left and right
+              ctx.fillRect(worldX + zone.x - 40, worldY + zone.y, 40, zone.height);
+              ctx.fillRect(worldX + zone.x + zone.width, worldY + zone.y, 40, zone.height);
+            } else {
+              // Horizontal road - sidewalks on top and bottom
+              ctx.fillRect(worldX + zone.x, worldY + zone.y - 40, zone.width, 40);
+              ctx.fillRect(worldX + zone.x, worldY + zone.y + zone.height, zone.width, 40);
+            }
+
+            ctx.fillStyle = URBAN_COLORS.ROAD_ASPHALT;
           }
-          ctx.restore();
+
+          // 2. Road markings
+          ctx.strokeStyle = URBAN_COLORS.ROAD_MARKING_WHITE;
+          ctx.lineWidth = 3;
+          ctx.setLineDash([20, 20]);
+
+          for (const zone of tile.roadZones) {
+            ctx.beginPath();
+            if (zone.height > zone.width) {
+              // Vertical road - vertical center line
+              const centerX = worldX + zone.x + zone.width / 2;
+              ctx.moveTo(centerX, worldY + zone.y);
+              ctx.lineTo(centerX, worldY + zone.y + zone.height);
+            } else {
+              // Horizontal road - horizontal center line
+              const centerY = worldY + zone.y + zone.height / 2;
+              ctx.moveTo(worldX + zone.x, centerY);
+              ctx.lineTo(worldX + zone.x + zone.width, centerY);
+            }
+            ctx.stroke();
+          }
+          ctx.setLineDash([]);
+
+          // 3. Buildings
+          for (const building of tile.buildings) {
+            // Shadow
+            ctx.fillStyle = URBAN_COLORS.SHADOW;
+            ctx.fillRect(
+              worldX + building.x + 5,
+              worldY + building.y + 5,
+              building.width,
+              building.height
+            );
+
+            // Building
+            ctx.fillStyle = building.color;
+            ctx.fillRect(
+              worldX + building.x,
+              worldY + building.y,
+              building.width,
+              building.height
+            );
+
+            // Outline
+            ctx.strokeStyle = '#222';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(
+              worldX + building.x,
+              worldY + building.y,
+              building.width,
+              building.height
+            );
+          }
+        }
+      } else if (track.type === TrackType.TOUGE) {
+        // === TOUGE MOUNTAIN ROAD RENDERING ===
+
+        const TOUGE_COLORS = {
+          CLIFF_DARK: '#2a1a0a',
+          CLIFF_LIGHT: '#4a3a2a',
+          GUARDRAIL: '#cccccc',
+          GUARDRAIL_POST: '#888888',
+          ROAD_ASPHALT: '#3a3a3a',
+          ROAD_EDGE: '#222222',
+          CENTER_LINE: '#ffff00',
+          SHADOW: 'rgba(0,0,0,0.4)',
+        };
+
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        const drawPoints = state.trackPoints;
+
+        // 1. Outer cliff/mountain edge (left side - "cliff" side)
+        ctx.lineWidth = track.width + 120;
+        ctx.strokeStyle = TOUGE_COLORS.CLIFF_DARK;
+        ctx.beginPath();
+        ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
+        for (let i = 1; i < drawPoints.length; i++) {
+          ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
+        }
+        ctx.stroke();
+
+        // 2. Inner mountain edge (right side - "mountain" side)
+        ctx.lineWidth = track.width + 80;
+        ctx.strokeStyle = TOUGE_COLORS.CLIFF_LIGHT;
+        ctx.stroke();
+
+        // 3. Road shoulder
+        ctx.lineWidth = track.width + 30;
+        ctx.strokeStyle = TOUGE_COLORS.ROAD_EDGE;
+        ctx.stroke();
+
+        // 4. Road surface
+        ctx.lineWidth = track.width;
+        ctx.strokeStyle = TOUGE_COLORS.ROAD_ASPHALT;
+        ctx.stroke();
+
+        // 5. Center line (yellow dashed)
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = TOUGE_COLORS.CENTER_LINE;
+        ctx.setLineDash([15, 25]);
+        ctx.lineDashOffset = -state.dashOffset;
+        ctx.beginPath();
+        ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
+        for (let i = 1; i < drawPoints.length; i++) {
+          ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
+
+        // 6. Guardrails (on cliff side)
+        ctx.strokeStyle = TOUGE_COLORS.GUARDRAIL;
+        ctx.lineWidth = 6;
+
+        // Draw continuous guardrail line
+        ctx.beginPath();
+        for (let i = 1; i < drawPoints.length - 1; i++) {
+          const p = drawPoints[i];
+          const prev = drawPoints[i - 1];
+          const next = drawPoints[i + 1];
+
+          const dx = next.x - prev.x;
+          const dy = next.y - prev.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len === 0) continue;
+
+          const perpX = -dy / len;
+          const perpY = dx / len;
+          const offset = track.width / 2 + 15;
+
+          const gx = p.x + perpX * offset;
+          const gy = p.y + perpY * offset;
+
+          if (i === 1) {
+            ctx.moveTo(gx, gy);
+          } else {
+            ctx.lineTo(gx, gy);
+          }
+
+          // Draw guardrail posts every GUARDRAIL_POST_SPACING pixels
+          if (i % Math.floor(TOUGE_CONFIG.GUARDRAIL_POST_SPACING / TOUGE_CONFIG.SEGMENT_LENGTH) === 0) {
+            ctx.fillStyle = TOUGE_COLORS.GUARDRAIL_POST;
+            const postX = p.x + perpX * offset;
+            const postY = p.y + perpY * offset;
+            ctx.fillRect(postX - 3, postY - 3, 6, 6);
+          }
+        }
+        ctx.stroke();
+
+      } else {
+        // Standard track rendering
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // Road Border
+        ctx.lineWidth = track.width + 20;
+        ctx.strokeStyle = '#5c4e38'; // Dirt/Gravel border
+        ctx.beginPath();
+        const drawPoints = state.trackPoints;
+        ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
+        for (let i = 1; i < drawPoints.length; i++) {
+          ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
+        }
+        if (track.type === TrackType.LOOP) ctx.closePath();
+        ctx.stroke();
+
+        // Road Surface
+        ctx.lineWidth = track.width;
+        ctx.strokeStyle = '#808080'; // Asphalt
+        ctx.stroke();
+
+        // Center Line
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.setLineDash([20, 20]);
+        if (track.type === TrackType.INFINITE) {
+          ctx.lineDashOffset = -state.dashOffset;
+        }
+        ctx.beginPath();
+        ctx.moveTo(drawPoints[0].x, drawPoints[0].y);
+        for (let i = 1; i < drawPoints.length; i++) {
+          ctx.lineTo(drawPoints[i].x, drawPoints[i].y);
+        }
+        if (track.type === TrackType.LOOP) ctx.closePath();
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineDashOffset = 0;
+
+        // Start/Finish Line
+        if (track.type === TrackType.LOOP) {
+            ctx.save();
+            // We expect index 1 to be (0,0) or start, index 0 is lead-in.
+            // Let's assume the start line is between point 1 and 2
+            const startIdx = 1;
+            if (drawPoints.length > startIdx + 1) {
+                const pStart = drawPoints[startIdx];
+                const pNext = drawPoints[startIdx+1];
+
+                ctx.translate(pStart.x, pStart.y);
+                const angle = Math.atan2(pNext.y - pStart.y, pNext.x - pStart.x);
+                ctx.rotate(angle);
+
+                // Checkered Line
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(-10, -track.width/2, 20, track.width);
+                ctx.fillStyle = '#000000';
+                for(let i=0; i<10; i++) {
+                  if(i%2===0) ctx.fillRect(-10, -track.width/2 + i*(track.width/10), 10, track.width/10);
+                  else ctx.fillRect(0, -track.width/2 + i*(track.width/10), 10, track.width/10);
+                }
+            }
+            ctx.restore();
+        }
       }
 
       // 2. Draw Car (Toyota Celica Castrol Style)
@@ -863,63 +1195,107 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       const mapY = 20;
 
       // Map Background
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
       ctx.fillRect(mapX, mapY, mapSize, mapSize);
       ctx.strokeStyle = '#444';
       ctx.lineWidth = 2;
       ctx.strokeRect(mapX, mapY, mapSize, mapSize);
 
-      // Find bounds
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      // Sampling points for performance if array is huge, but < 1000 is fine
-      const mapPoints = state.trackPoints;
-      mapPoints.forEach(p => {
-         if (p.x < minX) minX = p.x;
-         if (p.x > maxX) maxX = p.x;
-         if (p.y < minY) minY = p.y;
-         if (p.y > maxY) maxY = p.y;
-      });
-      // Ensure car is in bounds (it should be near track)
-      minX = Math.min(minX, car.x);
-      maxX = Math.max(maxX, car.x);
-      minY = Math.min(minY, car.y);
-      maxY = Math.max(maxY, car.y);
+      if (track.type === TrackType.URBAN && urbanStateRef.current) {
+        // Urban minimap - show nearby tiles
+        const urbanState = urbanStateRef.current;
+        const mapScale = mapSize / (TILE_SIZE * 5); // Show 5x5 tile area
+        const centerX = mapX + mapSize / 2;
+        const centerY = mapY + mapSize / 2;
 
-      const padding = track.width + 500;
-      minX -= padding; maxX += padding; minY -= padding; maxY += padding;
-      const rangeX = maxX - minX || 1;
-      const rangeY = maxY - minY || 1;
-      const mapScale = Math.min(mapSize / rangeX, mapSize / rangeY);
-      
-      const toMapX = (x: number) => mapX + (x - minX) * mapScale + (mapSize - rangeX * mapScale) / 2;
-      const toMapY = (y: number) => mapY + (y - minY) * mapScale + (mapSize - rangeY * mapScale) / 2;
+        // Draw tiles
+        for (const [key, tile] of urbanState.loadedTiles) {
+          const [gx, gy] = key.split(',').map(Number);
+          const tileScreenX = centerX + (gx * TILE_SIZE - car.x) * mapScale;
+          const tileScreenY = centerY + (gy * TILE_SIZE - car.y) * mapScale;
 
-      // Draw Mini Track
-      ctx.beginPath();
-      ctx.strokeStyle = '#888';
-      ctx.lineWidth = 3;
-      if (mapPoints.length > 0) {
-        ctx.moveTo(toMapX(mapPoints[0].x), toMapY(mapPoints[0].y));
-        for (let i = 1; i < mapPoints.length; i++) {
-           ctx.lineTo(toMapX(mapPoints[i].x), toMapY(mapPoints[i].y));
+          // Roads
+          ctx.fillStyle = '#666';
+          for (const zone of tile.roadZones) {
+            ctx.fillRect(
+              tileScreenX + zone.x * mapScale,
+              tileScreenY + zone.y * mapScale,
+              zone.width * mapScale,
+              zone.height * mapScale
+            );
+          }
         }
+
+        // Draw car
+        ctx.fillStyle = '#ff0000';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Car direction
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(
+          centerX + Math.cos(car.angle) * 15,
+          centerY + Math.sin(car.angle) * 15
+        );
+        ctx.stroke();
+      } else {
+        // Standard track minimap
+        // Find bounds
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        // Sampling points for performance if array is huge, but < 1000 is fine
+        const mapPoints = state.trackPoints;
+        mapPoints.forEach(p => {
+           if (p.x < minX) minX = p.x;
+           if (p.x > maxX) maxX = p.x;
+           if (p.y < minY) minY = p.y;
+           if (p.y > maxY) maxY = p.y;
+        });
+        // Ensure car is in bounds (it should be near track)
+        minX = Math.min(minX, car.x);
+        maxX = Math.max(maxX, car.x);
+        minY = Math.min(minY, car.y);
+        maxY = Math.max(maxY, car.y);
+
+        const padding = track.width + 500;
+        minX -= padding; maxX += padding; minY -= padding; maxY += padding;
+        const rangeX = maxX - minX || 1;
+        const rangeY = maxY - minY || 1;
+        const mapScale = Math.min(mapSize / rangeX, mapSize / rangeY);
+
+        const toMapX = (x: number) => mapX + (x - minX) * mapScale + (mapSize - rangeX * mapScale) / 2;
+        const toMapY = (y: number) => mapY + (y - minY) * mapScale + (mapSize - rangeY * mapScale) / 2;
+
+        // Draw Mini Track
+        ctx.beginPath();
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 3;
+        if (mapPoints.length > 0) {
+          ctx.moveTo(toMapX(mapPoints[0].x), toMapY(mapPoints[0].y));
+          for (let i = 1; i < mapPoints.length; i++) {
+             ctx.lineTo(toMapX(mapPoints[i].x), toMapY(mapPoints[i].y));
+          }
+        }
+        if (track.type === TrackType.LOOP) ctx.closePath();
+        ctx.stroke();
+
+        // Draw Mini Car
+        ctx.fillStyle = '#ff0000';
+        ctx.beginPath();
+        ctx.arc(toMapX(car.x), toMapY(car.y), 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Mini Car Direction
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(toMapX(car.x), toMapY(car.y));
+        ctx.lineTo(toMapX(car.x + Math.cos(car.angle) * 500), toMapY(car.y + Math.sin(car.angle) * 500));
+        ctx.stroke();
       }
-      if (track.type === TrackType.LOOP) ctx.closePath();
-      ctx.stroke();
-
-      // Draw Mini Car
-      ctx.fillStyle = '#ff0000';
-      ctx.beginPath();
-      ctx.arc(toMapX(car.x), toMapY(car.y), 4, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Mini Car Direction
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(toMapX(car.x), toMapY(car.y));
-      ctx.lineTo(toMapX(car.x + Math.cos(car.angle) * 500), toMapY(car.y + Math.sin(car.angle) * 500));
-      ctx.stroke();
       
       animationFrameId = requestAnimationFrame(loop);
     };
@@ -964,6 +1340,12 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
                 <div className="bg-black/50 p-2 rounded border-l-4 border-green-500">
                     <span className="text-gray-400 text-sm">LAP</span><br/>
                     {hud.lap} / {track.lapsToWin}
+                </div>
+            )}
+            {track.type === TrackType.TOUGE && (
+                <div className="bg-black/50 p-2 rounded border-l-4 border-blue-500">
+                    <span className="text-gray-400 text-sm">DISTANCE</span><br/>
+                    {Math.floor(gameStateRef.current.distanceTraveled / 10)} <span className="text-xs">M</span>
                 </div>
             )}
             <div className="bg-black/50 p-2 rounded border-l-4 border-yellow-500">
