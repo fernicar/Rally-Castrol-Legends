@@ -258,6 +258,20 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       let isBraking = false;
       let isHandbraking = inputs.space;
       
+      // Determine braking/reverse FIRST (before acceleration logic)
+      if (inputs.down) {
+        const movingForward = (car.velocity.x * Math.cos(car.angle) + car.velocity.y * Math.sin(car.angle)) > 0.1;
+        if (movingForward) {
+          isBraking = true;
+        } else {
+          // Reverse
+          const REVERSE_SCALE = 300; // Scale reverse power
+          const reversePower = tuning.reversePower * REVERSE_SCALE;
+          frontDriveForce = -reversePower * driveBiasFront;
+          rearDriveForce = -reversePower * (1 - driveBiasFront);
+        }
+      }
+      
       // Phase 4: Stability Control reduces throttle when spinning
       let stabilityIntervention = 1.0;
       if (stabilityControl > 0 && Math.abs(car.angularVelocity) > 0.08) {
@@ -267,7 +281,7 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
         stabilityIntervention = 1 - intervention;
       }
       
-      if (inputs.up) {
+      if (inputs.up && !isBraking) {
         // Distribute engine power based on drive bias
         // SCALING: Legacy acceleration values (0.3) need to be scaled for mass-based physics
         const ACCEL_SCALE = 400; // Converts legacy 0.3 to ~120 force units
@@ -285,7 +299,7 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
         
         frontDriveForce = totalPower * driveBiasFront;
         rearDriveForce = totalPower * (1 - driveBiasFront);
-      } else if (!inputs.down) {
+      } else if (!inputs.down && !isBraking) {
         // Engine braking when coasting
         const BRAKE_SCALE = 50; // Scale engine braking
         const coastingDecel = -engineBraking * BRAKE_SCALE;
@@ -293,19 +307,6 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
         if (forwardVel > 0.5) {
           frontDriveForce = coastingDecel * driveBiasFront;
           rearDriveForce = coastingDecel * (1 - driveBiasFront);
-        }
-      }
-      
-      if (inputs.down) {
-        const movingForward = (car.velocity.x * Math.cos(car.angle) + car.velocity.y * Math.sin(car.angle)) > 0.1;
-        if (movingForward) {
-          isBraking = true;
-        } else {
-          // Reverse
-          const REVERSE_SCALE = 300; // Scale reverse power
-          const reversePower = tuning.reversePower * REVERSE_SCALE;
-          frontDriveForce = -reversePower * driveBiasFront;
-          rearDriveForce = -reversePower * (1 - driveBiasFront);
         }
       }
 
