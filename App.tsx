@@ -124,11 +124,17 @@ const App: React.FC = () => {
                   >
                     <div className="absolute inset-0 bg-gradient-to-r from-red-900/20 to-green-900/20 opacity-0 group-hover:opacity-100 transition-opacity" />
                     <h3 className="text-xl font-bold relative z-10">{track.name}</h3>
-                    <p className="text-xs text-gray-400 relative z-10">{track.type === 'INFINITE' ? '∞ PROCEDURAL' : `${track.lapsToWin} LAPS • TECHNICAL`}</p>
+                    <p className="text-xs text-gray-400 relative z-10">
+                      {track.type === TrackType.INFINITE
+                        ? '∞ PROCEDURAL'
+                        : track.type === TrackType.URBAN
+                          ? '🏙️ OPEN WORLD'
+                          : `${track.lapsToWin} LAPS • TECHNICAL`}
+                    </p>
                   </button>
                   
-                  {/* EDIT BUTTON (Only for non-infinite tracks in debug mode) */}
-                  {showDebug && track.type !== TrackType.INFINITE && (
+                  {/* EDIT BUTTON (Only for loop tracks in debug mode) */}
+                  {showDebug && track.type === TrackType.LOOP && (
                     <button 
                       onClick={(e) => startEditor(track, e)}
                       className="absolute top-2 right-2 z-20 bg-yellow-600 hover:bg-yellow-500 text-black font-bold text-xs px-2 py-1 rounded shadow-lg opacity-80 hover:opacity-100"

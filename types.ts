@@ -7,7 +7,8 @@ export enum GameMode {
 
 export enum TrackType {
   LOOP = 'LOOP',
-  INFINITE = 'INFINITE'
+  INFINITE = 'INFINITE',
+  URBAN = 'URBAN'
 }
 
 export interface Point {
@@ -143,6 +144,67 @@ export interface TuningConfig {
 
   // Visuals
   carScale: number;
+}
+
+// === URBAN FREEROAM MODE TYPES ===
+
+export enum TileType {
+  DEAD_END_N = 'DEAD_END_N',
+  DEAD_END_E = 'DEAD_END_E',
+  DEAD_END_S = 'DEAD_END_S',
+  DEAD_END_W = 'DEAD_END_W',
+  STRAIGHT_NS = 'STRAIGHT_NS',
+  STRAIGHT_EW = 'STRAIGHT_EW',
+  CORNER_NE = 'CORNER_NE',
+  CORNER_ES = 'CORNER_ES',
+  CORNER_SW = 'CORNER_SW',
+  CORNER_NW = 'CORNER_NW',
+  T_JUNCTION_NES = 'T_JUNCTION_NES',
+  T_JUNCTION_ESW = 'T_JUNCTION_ESW',
+  T_JUNCTION_NSW = 'T_JUNCTION_NSW',
+  T_JUNCTION_NEW = 'T_JUNCTION_NEW',
+  CROSSROADS = 'CROSSROADS',
+  EMPTY = 'EMPTY'
+}
+
+export enum EdgeType {
+  ROAD = 'ROAD',
+  BUILDING = 'BUILDING'
+}
+
+export interface TileEdges {
+  north: EdgeType;
+  east: EdgeType;
+  south: EdgeType;
+  west: EdgeType;
+}
+
+export interface RoadZone {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BuildingFootprint {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+}
+
+export interface CityTile {
+  type: TileType;
+  edges: TileEdges;
+  roadZones: RoadZone[];
+  buildings: BuildingFootprint[];
+}
+
+export interface UrbanWorldState {
+  loadedTiles: Map<string, CityTile>;
+  worldSeed: number;
+  playerGridPos: { gx: number; gy: number };
 }
 
 export const DEFAULT_TUNING: TuningConfig = {

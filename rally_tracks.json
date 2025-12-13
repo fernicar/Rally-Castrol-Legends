@@ -4792,5 +4792,19 @@
     "controlPoints": [],
     "width": 300,
     "lapsToWin": 999
+  },
+  {
+    "id": 6,
+    "name": "Urban Freeroam",
+    "type": "URBAN",
+    "points": [
+      {
+        "x": 400,
+        "y": 400
+      }
+    ],
+    "controlPoints": [],
+    "width": 200,
+    "lapsToWin": 999
   }
 ]
