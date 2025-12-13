@@ -461,18 +461,24 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       const isOffroad = minDist > (track.width / 2);
       const currentFriction = isOffroad ? tuning.offRoadFriction : tuning.friction;
 
+      // Recalculate speed after braking (before applying friction/drag)
+      let updatedSpeed = Math.sqrt(car.velocity.x ** 2 + car.velocity.y ** 2);
+
       // Apply Drag 
       car.velocity.x *= (1 - tuning.drag);
       car.velocity.y *= (1 - tuning.drag);
 
-      // Apply Friction 
-      if (speed > 0) {
+      // Apply Friction (use updatedSpeed after braking, not old speed)
+      if (updatedSpeed > 0) {
         car.velocity.x *= (1 - currentFriction);
         car.velocity.y *= (1 - currentFriction);
       }
 
+      // Recalculate speed after all longitudinal forces (braking, friction, drag) have been applied
+      updatedSpeed = Math.sqrt(car.velocity.x ** 2 + car.velocity.y ** 2);
+
       // 8. Phase 2: Calculate Slip Angles
-      if (speed > 0.5) {
+      if (updatedSpeed > 0.5) {
         const velocityAngle = Math.atan2(car.velocity.y, car.velocity.x);
         
         // Overall slip angle (difference between heading and velocity)
@@ -539,8 +545,9 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
         // Apply realistic grip to align velocity with car angle
         const newVelocityAngle = velocityAngle + slipAngleRad * averageGrip;
         
-        car.velocity.x = Math.cos(newVelocityAngle) * speed;
-        car.velocity.y = Math.sin(newVelocityAngle) * speed;
+        // Use updatedSpeed (after braking) instead of old speed
+        car.velocity.x = Math.cos(newVelocityAngle) * updatedSpeed;
+        car.velocity.y = Math.sin(newVelocityAngle) * updatedSpeed;
 
         car.driftFactor = Math.abs(slipAngleRad);
       } else {
