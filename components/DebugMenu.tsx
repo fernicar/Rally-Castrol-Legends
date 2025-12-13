@@ -480,9 +480,47 @@ const DebugMenu: React.FC<DebugMenuProps> = ({ config, onConfigChange, tracks, o
         </div>
         <div className="space-y-1">
           <label className="text-gray-400 block">Drift Assist ({(config.driftAssist || 0.0).toFixed(2)})</label>
-          <input type="range" min="0" max="1.0" step="0.05" 
+          <input type="range" min="0" max="1.0" step="0.05"
             value={config.driftAssist || 0.0} onChange={(e) => handleChange('driftAssist', e.target.value)} className="w-full accent-pink-500"/>
           <span className="text-xs text-gray-500">Maintains drift angle</span>
+        </div>
+
+        {/* GAMEPAD SETTINGS */}
+        <h3 className="text-purple-400 font-bold border-b border-purple-700 pb-1 mt-4">Gamepad Settings</h3>
+        <div className="space-y-1 flex items-center gap-2">
+          <input type="checkbox"
+            checked={config.gamepadEnabled !== undefined ? config.gamepadEnabled : true}
+            onChange={(e) => onConfigChange({ ...config, gamepadEnabled: e.target.checked })}
+            className="w-4 h-4 accent-purple-500"/>
+          <label className="text-gray-400">Gamepad Enabled</label>
+          <span className="text-xs text-gray-500 ml-auto">Enable controller input</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Steering Sensitivity ({(config.gamepadSteeringSensitivity || 1.0).toFixed(2)})</label>
+          <input type="range" min="0.5" max="2.0" step="0.05"
+            value={config.gamepadSteeringSensitivity || 1.0} onChange={(e) => handleChange('gamepadSteeringSensitivity', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">Stick sensitivity multiplier</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Steering Deadzone ({(config.gamepadSteeringDeadzone || 0.15).toFixed(2)})</label>
+          <input type="range" min="0" max="0.3" step="0.01"
+            value={config.gamepadSteeringDeadzone || 0.15} onChange={(e) => handleChange('gamepadSteeringDeadzone', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">Left stick deadzone (0-0.3)</span>
+        </div>
+        <div className="space-y-1">
+          <label className="text-gray-400 block">Trigger Deadzone ({(config.gamepadTriggerDeadzone || 0.05).toFixed(2)})</label>
+          <input type="range" min="0" max="0.2" step="0.01"
+            value={config.gamepadTriggerDeadzone || 0.05} onChange={(e) => handleChange('gamepadTriggerDeadzone', e.target.value)} className="w-full accent-purple-500"/>
+          <span className="text-xs text-gray-500">LT/RT deadzone (0-0.2)</span>
+        </div>
+        <div className="space-y-1 flex items-center gap-2">
+          <input type="checkbox"
+            checked={config.gamepadVibration || false}
+            onChange={(e) => onConfigChange({ ...config, gamepadVibration: e.target.checked })}
+            className="w-4 h-4 accent-purple-500"
+            disabled/>
+          <label className="text-gray-400">Vibration (Coming Soon)</label>
+          <span className="text-xs text-gray-500 ml-auto">Force feedback</span>
         </div>
 
         {/* CAR PHYSICS */}
