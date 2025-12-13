@@ -1,0 +1,61 @@
+{
+  "_version": 5,
+  "presetName": "Rally",
+  "presetAuthor": "Rally Castrol Legends",
+  "presetDescription": "Balanced for mixed surfaces. Controllable slides, good recovery, ideal for rally stages.",
+  
+  "mass": 1100,
+  "inertiaMultiplier": 1.3,
+  "centerOfMassOffset": -0.1,
+  
+  "weightDistribution": 0.46,
+  "weightTransferAccel": 0.5,
+  "weightTransferBrake": 0.5,
+  "weightTransferLateral": 0.4,
+  
+  "angularDamping": 0.94,
+  "angularVelocityMax": 0.16,
+  
+  "tractionPeak": 1.0,
+  "tractionSliding": 0.7,
+  "slipAngleOptimal": 12,
+  "slipAnglePeak": 28,
+  "tractionFalloff": 1.5,
+  "tractionBiasFront": 0.48,
+  "tractionLossMult": 1.0,
+  "lowSpeedTractionLoss": 0.1,
+  
+  "driveBiasFront": 0.35,
+  "driveInertia": 0.85,
+  "engineBraking": 0.35,
+  
+  "brakeForce": 1.2,
+  "brakeBiasFront": 0.5,
+  "handbrakePower": 0.8,
+  "handbrakeSlipAngle": 35,
+  "brakeLockupRotation": 0.6,
+  
+  "steeringLock": 55,
+  "steeringSpeedScale": 0.3,
+  "steeringLinearity": 1.0,
+  "counterSteerAssist": 0.1,
+  
+  "stabilityControl": 0.1,
+  "tractionControl": 0.0,
+  "absEnabled": false,
+  "driftAssist": 0.0,
+  
+  "maxSpeed": 18,
+  "acceleration": 0.3,
+  "reversePower": 0.15,
+  "brakePower": 0.6,
+  "friction": 0.02,
+  "drag": 0.005,
+  "maxSteerAngle": 0.7,
+  "steerSpeed": 0.1,
+  "steerReturn": 0.12,
+  "corneringStiffness": 0.12,
+  "offRoadFriction": 0.15,
+  "cameraSmoothness": 0.1,
+  "carScale": 4
+}

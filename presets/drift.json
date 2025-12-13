@@ -1,0 +1,61 @@
+{
+  "_version": 5,
+  "presetName": "Drift",
+  "presetAuthor": "Rally Castrol Legends",
+  "presetDescription": "Tail-happy drift machine. Based on Mazda FC3S RX7 handling. Pure RWD, low grip, high slip angles.",
+  
+  "mass": 1150,
+  "inertiaMultiplier": 2.0,
+  "centerOfMassOffset": -0.1,
+  
+  "weightDistribution": 0.46,
+  "weightTransferAccel": 0.6,
+  "weightTransferBrake": 0.6,
+  "weightTransferLateral": 0.35,
+  
+  "angularDamping": 0.93,
+  "angularVelocityMax": 0.18,
+  
+  "tractionPeak": 0.97,
+  "tractionSliding": 0.65,
+  "slipAngleOptimal": 15,
+  "slipAnglePeak": 35,
+  "tractionFalloff": 1.2,
+  "tractionBiasFront": 0.47,
+  "tractionLossMult": 0.8,
+  "lowSpeedTractionLoss": 0.15,
+  
+  "driveBiasFront": 0.0,
+  "driveInertia": 0.9,
+  "engineBraking": 0.25,
+  
+  "brakeForce": 1.0,
+  "brakeBiasFront": 0.6,
+  "handbrakePower": 0.9,
+  "handbrakeSlipAngle": 45,
+  "brakeLockupRotation": 0.7,
+  
+  "steeringLock": 65,
+  "steeringSpeedScale": 0.2,
+  "steeringLinearity": 0.9,
+  "counterSteerAssist": 0.3,
+  
+  "stabilityControl": 0.0,
+  "tractionControl": 0.0,
+  "absEnabled": false,
+  "driftAssist": 0.0,
+  
+  "maxSpeed": 15,
+  "acceleration": 0.32,
+  "reversePower": 0.15,
+  "brakePower": 0.5,
+  "friction": 0.025,
+  "drag": 0.006,
+  "maxSteerAngle": 0.8,
+  "steerSpeed": 0.08,
+  "steerReturn": 0.1,
+  "corneringStiffness": 0.08,
+  "offRoadFriction": 0.18,
+  "cameraSmoothness": 0.1,
+  "carScale": 4
+}

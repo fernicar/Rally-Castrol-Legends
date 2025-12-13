@@ -20,6 +20,14 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
     angle: 0, // Facing East initially
     velocity: { x: 0, y: 0 },
     steeringAngle: 0,
+    angularVelocity: 0, // Phase 1: rotation rate
+    frontWeight: tuning.weightDistribution || 0.5, // Phase 1: dynamic weight
+    rearWeight: 1 - (tuning.weightDistribution || 0.5),
+    slipAngle: 0, // Phase 2: overall slip
+    frontSlipAngle: 0, // Phase 2: front axle slip
+    rearSlipAngle: 0, // Phase 2: rear axle slip
+    frontGrip: 1.0, // Phase 2: front grip coefficient
+    rearGrip: 1.0, // Phase 2: rear grip coefficient
     driftFactor: 0
   });
 
@@ -109,46 +117,297 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
       const inputs = inputsRef.current;
       const state = gameStateRef.current;
 
-      // --- PHYSICS UPDATE ---
+      // --- PHASE 1: PHYSICS UPDATE ---
       
-      // 1. Steering Logic
-      let targetSteer = 0;
-      if (inputs.left) targetSteer = -tuning.maxSteerAngle;
-      if (inputs.right) targetSteer = tuning.maxSteerAngle;
-
-      // Move current steer towards target
-      if (targetSteer !== 0) {
-        if (targetSteer > car.steeringAngle) car.steeringAngle = Math.min(targetSteer, car.steeringAngle + tuning.steerSpeed);
-        else car.steeringAngle = Math.max(targetSteer, car.steeringAngle - tuning.steerSpeed);
-      } else {
-        if (car.steeringAngle > 0) car.steeringAngle = Math.max(0, car.steeringAngle - tuning.steerReturn);
-        else if (car.steeringAngle < 0) car.steeringAngle = Math.min(0, car.steeringAngle + tuning.steerReturn);
-      }
-
-      // 2. Acceleration / Braking
-      let engineForce = 0;
-      if (inputs.up) {
-        engineForce = tuning.acceleration;
-      }
-      if (inputs.down) {
-        const movingForward = (car.velocity.x * Math.cos(car.angle) + car.velocity.y * Math.sin(car.angle)) > 0.1;
-        if (movingForward) {
-           engineForce = -tuning.brakePower; 
+      // Get Phase 1 & 2 parameters with defaults for backward compatibility
+      const mass = tuning.mass || 1100;
+      const inertiaMultiplier = tuning.inertiaMultiplier || 1.2;
+      const weightDistribution = tuning.weightDistribution || 0.5;
+      const weightTransferAccel = tuning.weightTransferAccel || 0.4;
+      const weightTransferBrake = tuning.weightTransferBrake || 0.5;
+      const angularDamping = tuning.angularDamping || 0.95;
+      const angularVelocityMax = tuning.angularVelocityMax || 0.15;
+      
+      // Phase 2: Tire Model Parameters
+      const tractionPeak = tuning.tractionPeak || 1.0;
+      const tractionSliding = tuning.tractionSliding || 0.7;
+      const slipAngleOptimal = tuning.slipAngleOptimal || 10;
+      const slipAnglePeak = tuning.slipAnglePeak || 25;
+      const tractionFalloff = tuning.tractionFalloff || 1.5;
+      const tractionBiasFront = tuning.tractionBiasFront || 0.5;
+      const tractionLossMult = tuning.tractionLossMult || 1.0;
+      const lowSpeedTractionLoss = tuning.lowSpeedTractionLoss || 0.0;
+      
+      // Phase 3: Drivetrain & Braking Parameters
+      const driveBiasFront = tuning.driveBiasFront !== undefined ? tuning.driveBiasFront : 0.0;
+      const driveInertia = tuning.driveInertia || 0.9;
+      const engineBraking = tuning.engineBraking || 0.3;
+      const brakeForce = tuning.brakeForce || (tuning.brakePower * 2); // Scale legacy
+      const brakeBiasFront = tuning.brakeBiasFront || 0.55;
+      const handbrakePower = tuning.handbrakePower || 0.8;
+      const handbrakeSlipAngle = tuning.handbrakeSlipAngle || 35;
+      const brakeLockupRotation = tuning.brakeLockupRotation || 0.5;
+      
+      // Phase 4: Steering & Assists Parameters
+      const steeringLock = tuning.steeringLock || 45;
+      const steeringSpeedScale = tuning.steeringSpeedScale !== undefined ? tuning.steeringSpeedScale : 0.4;
+      const steeringLinearity = tuning.steeringLinearity || 1.0;
+      const counterSteerAssist = tuning.counterSteerAssist || 0.0;
+      const stabilityControl = tuning.stabilityControl || 0.0;
+      const tractionControl = tuning.tractionControl || 0.0;
+      const absEnabled = tuning.absEnabled || false;
+      const driftAssist = tuning.driftAssist || 0.0;
+      
+      // Phase 2: Tire Grip Curve Function
+      const calculateTireGrip = (slipAngleDeg: number): number => {
+        const absSlip = Math.abs(slipAngleDeg);
+        
+        if (absSlip <= slipAngleOptimal) {
+          // Linear buildup to peak
+          return tractionPeak * (absSlip / slipAngleOptimal);
+        } else if (absSlip <= slipAnglePeak) {
+          // At peak grip
+          return tractionPeak;
         } else {
-           engineForce = -tuning.reversePower;
+          // Falloff toward sliding grip
+          const excess = absSlip - slipAnglePeak;
+          const falloffRange = 90 - slipAnglePeak;
+          const t = Math.min(1, excess / falloffRange);
+          const falloffCurve = Math.pow(t, tractionFalloff);
+          return tractionPeak - (tractionPeak - tractionSliding) * falloffCurve;
+        }
+      };
+      
+      // 1. Phase 4: Advanced Steering Logic
+      const DEG_TO_RAD = Math.PI / 180;
+      
+      // Calculate raw input (-1 to 1)
+      let rawSteerInput = 0;
+      if (inputs.left) rawSteerInput = -1;
+      if (inputs.right) rawSteerInput = 1;
+      
+      // Apply steering linearity curve
+      const curvedInput = Math.sign(rawSteerInput) * Math.pow(Math.abs(rawSteerInput), steeringLinearity);
+      
+      // Speed-sensitive steering lock
+      const currentSpeedForSteering = Math.sqrt(car.velocity.x ** 2 + car.velocity.y ** 2);
+      const speedFactor = 1 - (currentSpeedForSteering / tuning.maxSpeed) * steeringSpeedScale;
+      const effectiveMaxAngle = steeringLock * DEG_TO_RAD * Math.max(0.2, speedFactor);
+      
+      // Calculate target steering angle
+      let targetSteer = curvedInput * effectiveMaxAngle;
+      
+      // Counter-steer assist (helps maintain drift angle)
+      if (counterSteerAssist > 0 && Math.abs(car.slipAngle) > 15) {
+        const driftDirection = Math.sign(car.angularVelocity);
+        const counterForce = -driftDirection * counterSteerAssist * (Math.abs(car.slipAngle) / 90);
+        targetSteer += counterForce * effectiveMaxAngle;
+      }
+      
+      // Drift assist (helps maintain drift angle by adjusting steering)
+      if (driftAssist > 0 && Math.abs(car.slipAngle) > 20) {
+        const targetSlipAngle = 30; // Ideal drift angle
+        const slipError = Math.abs(car.slipAngle) - targetSlipAngle;
+        if (slipError > 0) {
+          // Too much slip, counter-steer more
+          targetSteer -= Math.sign(car.slipAngle) * slipError * 0.01 * driftAssist;
         }
       }
 
-      // 3. Apply Forces to Velocity
-      car.velocity.x += Math.cos(car.angle) * engineForce;
-      car.velocity.y += Math.sin(car.angle) * engineForce;
+      // Move current steer towards target
+      if (targetSteer !== 0 || car.steeringAngle !== 0) {
+        const steerRate = targetSteer !== 0 ? tuning.steerSpeed : tuning.steerReturn;
+        if (Math.abs(targetSteer - car.steeringAngle) < steerRate) {
+          car.steeringAngle = targetSteer;
+        } else if (targetSteer > car.steeringAngle) {
+          car.steeringAngle += steerRate;
+        } else {
+          car.steeringAngle -= steerRate;
+        }
+      }
 
-      // 4. Update Position
+      // 2. Calculate Weight Transfer (Phase 1)
+      car.frontWeight = weightDistribution;
+      car.rearWeight = 1 - weightDistribution;
+      
+      // Longitudinal weight transfer (using new scaled values)
+      const currentSpeed = Math.sqrt(car.velocity.x ** 2 + car.velocity.y ** 2);
+      const gravity = 9.81; // m/s²
+      const ACCEL_SCALE = 400;
+      const BRAKE_FORCE_SCALE = 150;
+      
+      if (inputs.up && !inputs.down) {
+        // Acceleration shifts weight rearward (use scaled acceleration)
+        const accelForce = (tuning.acceleration * ACCEL_SCALE) / mass;
+        const transfer = weightTransferAccel * (accelForce / gravity) * 0.01;
+        car.frontWeight = Math.max(0.2, weightDistribution - transfer);
+        car.rearWeight = Math.min(0.8, 1 - car.frontWeight);
+      }
+      
+      if (inputs.down) {
+        // Braking shifts weight forward (use scaled brake force)
+        const scaledBrakeForce = (brakeForce * BRAKE_FORCE_SCALE) / mass;
+        const transfer = weightTransferBrake * (scaledBrakeForce / gravity) * 0.01;
+        car.frontWeight = Math.min(0.8, weightDistribution + transfer);
+        car.rearWeight = Math.max(0.2, 1 - car.frontWeight);
+      }
+      
+      // 3. Phase 3 & 4: Drivetrain - Power Distribution & Wheelspin with Assists
+      let frontDriveForce = 0;
+      let rearDriveForce = 0;
+      let isBraking = false;
+      let isHandbraking = inputs.space;
+      
+      // Phase 4: Stability Control reduces throttle when spinning
+      let stabilityIntervention = 1.0;
+      if (stabilityControl > 0 && Math.abs(car.angularVelocity) > 0.08) {
+        const spinRate = Math.abs(car.angularVelocity);
+        const spinThreshold = 0.08;
+        const intervention = Math.min(1, (spinRate - spinThreshold) * 10 * stabilityControl);
+        stabilityIntervention = 1 - intervention;
+      }
+      
+      if (inputs.up) {
+        // Distribute engine power based on drive bias
+        // SCALING: Legacy acceleration values (0.3) need to be scaled for mass-based physics
+        const ACCEL_SCALE = 400; // Converts legacy 0.3 to ~120 force units
+        let totalPower = tuning.acceleration * ACCEL_SCALE * stabilityIntervention;
+        
+        // Phase 4: Traction Control limits wheelspin
+        if (tractionControl > 0) {
+          const wheelspinThreshold = 0.3;
+          const avgGrip = (car.frontGrip + car.rearGrip) / 2;
+          if (avgGrip < wheelspinThreshold) {
+            const tcIntervention = (wheelspinThreshold - avgGrip) * tractionControl;
+            totalPower *= (1 - tcIntervention);
+          }
+        }
+        
+        frontDriveForce = totalPower * driveBiasFront;
+        rearDriveForce = totalPower * (1 - driveBiasFront);
+      } else if (!inputs.down) {
+        // Engine braking when coasting
+        const BRAKE_SCALE = 50; // Scale engine braking
+        const coastingDecel = -engineBraking * BRAKE_SCALE;
+        const forwardVel = car.velocity.x * Math.cos(car.angle) + car.velocity.y * Math.sin(car.angle);
+        if (forwardVel > 0.5) {
+          frontDriveForce = coastingDecel * driveBiasFront;
+          rearDriveForce = coastingDecel * (1 - driveBiasFront);
+        }
+      }
+      
+      if (inputs.down) {
+        const movingForward = (car.velocity.x * Math.cos(car.angle) + car.velocity.y * Math.sin(car.angle)) > 0.1;
+        if (movingForward) {
+          isBraking = true;
+        } else {
+          // Reverse
+          const REVERSE_SCALE = 300; // Scale reverse power
+          const reversePower = tuning.reversePower * REVERSE_SCALE;
+          frontDriveForce = -reversePower * driveBiasFront;
+          rearDriveForce = -reversePower * (1 - driveBiasFront);
+        }
+      }
+
+      // 4. Phase 3: Apply Drive Forces with Wheelspin Effects
+      if (!isBraking) {
+        // Calculate available grip for drive forces (will be calculated properly after slip angles)
+        // For now, use a temporary grip estimate
+        const tempFrontGrip = car.frontGrip;
+        const tempRearGrip = car.rearGrip;
+        const currentSpeedCheck = Math.sqrt(car.velocity.x ** 2 + car.velocity.y ** 2);
+        
+        // Apply front drive force
+        if (Math.abs(frontDriveForce) > 0) {
+          const frontAccel = frontDriveForce / mass;
+          car.velocity.x += Math.cos(car.angle) * frontAccel;
+          car.velocity.y += Math.sin(car.angle) * frontAccel;
+          
+          // FWD wheelspin reduces steering effectiveness
+          if (driveBiasFront > 0.5 && frontDriveForce > 0) {
+            const wheelspinFactor = Math.max(0, (frontDriveForce / mass) - tempFrontGrip * 2);
+            if (wheelspinFactor > 0) {
+              // Reduce steering angle due to front wheelspin
+              car.steeringAngle *= (1 - wheelspinFactor * 0.3);
+            }
+          }
+        }
+        
+        // Apply rear drive force
+        if (Math.abs(rearDriveForce) > 0) {
+          const rearAccel = rearDriveForce / mass;
+          car.velocity.x += Math.cos(car.angle) * rearAccel;
+          car.velocity.y += Math.sin(car.angle) * rearAccel;
+          
+          // RWD wheelspin causes oversteer
+          if (driveBiasFront < 0.5 && rearDriveForce > 0 && currentSpeedCheck > 2) {
+            const wheelspinFactor = Math.max(0, (rearDriveForce / mass) - tempRearGrip * 2);
+            if (wheelspinFactor > 0) {
+              // Induce rotation based on steering direction and wheelspin
+              const steerSign = Math.sign(car.steeringAngle) || (Math.random() > 0.5 ? 1 : -1);
+              car.angularVelocity += steerSign * wheelspinFactor * 0.02;
+            }
+          }
+        }
+      }
+
+      // 5. Calculate current speed (needed for braking and handbrake logic)
+      const speed = Math.sqrt(car.velocity.x ** 2 + car.velocity.y ** 2);
+      
+      // 5a. Phase 3 & 4: Braking System with Bias, Handbrake & ABS
+      if (isBraking && speed > 0.1) {
+        // Calculate brake deceleration with bias
+        const BRAKE_FORCE_SCALE = 150; // Scale brake force for mass-based physics
+        let totalBrakeDecel = (brakeForce * BRAKE_FORCE_SCALE) / mass;
+        let frontBrake = totalBrakeDecel * brakeBiasFront;
+        let rearBrake = totalBrakeDecel * (1 - brakeBiasFront);
+        
+        // Phase 4: ABS prevents lockup
+        if (absEnabled) {
+          // Limit brake force to prevent exceeding grip
+          frontBrake = Math.min(frontBrake, car.frontGrip * 4);
+          rearBrake = Math.min(rearBrake, car.rearGrip * 4);
+        }
+        
+        // Apply braking force
+        const brakeAccel = -(frontBrake + rearBrake);
+        const brakeVelX = Math.cos(car.angle) * brakeAccel;
+        const brakeVelY = Math.sin(car.angle) * brakeAccel;
+        
+        car.velocity.x += brakeVelX;
+        car.velocity.y += brakeVelY;
+        
+        // Rear brake lockup causes rotation (trail braking) - unless ABS prevents it
+        if (!absEnabled && rearBrake > car.rearGrip * 3 && speed > 3) {
+          const lockupAmount = (rearBrake - car.rearGrip * 3) * brakeLockupRotation;
+          const steerSign = Math.sign(car.steeringAngle) || 0;
+          if (steerSign !== 0) {
+            car.angularVelocity += steerSign * lockupAmount * 0.01;
+          }
+        }
+      }
+      
+      // Phase 3: Handbrake
+      if (isHandbraking && speed > 1) {
+        // Handbrake directly induces rear slip and reduces rear grip
+        car.rearGrip *= (1 - handbrakePower * 0.5);
+        
+        // Induce rear slip angle
+        const targetRearSlip = handbrakeSlipAngle * Math.sign(car.steeringAngle || 1);
+        car.rearSlipAngle = car.rearSlipAngle + (targetRearSlip - car.rearSlipAngle) * 0.3;
+        
+        // Handbrake also applies some deceleration
+        const HANDBRAKE_SCALE = 10; // Scale handbrake deceleration
+        const handbrakeDecel = -handbrakePower * HANDBRAKE_SCALE;
+        car.velocity.x += Math.cos(car.angle) * handbrakeDecel;
+        car.velocity.y += Math.sin(car.angle) * handbrakeDecel;
+      }
+
+      // 6. Update Position
       car.x += car.velocity.x;
       car.y += car.velocity.y;
 
-      // 5. Friction & Drag & Offroad
-      const speed = Math.sqrt(car.velocity.x ** 2 + car.velocity.y ** 2);
+      // 7. Friction & Drag & Offroad
       
       // Detect Offroad
       let minDist = Infinity;
@@ -211,34 +470,96 @@ const GameEngine: React.FC<GameEngineProps> = ({ track, tuning, onFinish, onExit
         car.velocity.y *= (1 - currentFriction);
       }
 
-      // 6. Angular Physics 
+      // 8. Phase 2: Calculate Slip Angles
       if (speed > 0.5) {
-        car.angle += car.steeringAngle * (speed / tuning.maxSpeed) * 0.5;
-
-        const currentSpeed = Math.sqrt(car.velocity.x**2 + car.velocity.y**2);
         const velocityAngle = Math.atan2(car.velocity.y, car.velocity.x);
         
-        let diff = car.angle - velocityAngle;
-        while (diff <= -Math.PI) diff += Math.PI * 2;
-        while (diff > Math.PI) diff -= Math.PI * 2;
+        // Overall slip angle (difference between heading and velocity)
+        let slipAngleRad = car.angle - velocityAngle;
+        while (slipAngleRad <= -Math.PI) slipAngleRad += Math.PI * 2;
+        while (slipAngleRad > Math.PI) slipAngleRad -= Math.PI * 2;
+        
+        car.slipAngle = slipAngleRad * (180 / Math.PI); // Convert to degrees for display
+        
+        // Simplified front/rear slip angle calculation
+        // Front slip influenced by steering angle
+        car.frontSlipAngle = car.slipAngle + (car.steeringAngle * (180 / Math.PI) * 0.5);
+        
+        // Rear slip is primarily the overall slip
+        car.rearSlipAngle = car.slipAngle;
+        
+      // 9. Phase 2: Calculate Grip from Slip Angles
+        const baseFrontGrip = calculateTireGrip(car.frontSlipAngle);
+        const baseRearGrip = calculateTireGrip(car.rearSlipAngle);
+        
+        // Apply traction bias
+        const frontTraction = baseFrontGrip * tractionBiasFront;
+        const rearTraction = baseRearGrip * (1 - tractionBiasFront);
+        
+        // Apply weight transfer effects
+        car.frontGrip = frontTraction * car.frontWeight * tractionLossMult;
+        car.rearGrip = rearTraction * car.rearWeight * tractionLossMult;
+        
+        // Apply surface effects
+        if (isOffroad) {
+          car.frontGrip *= 0.6;
+          car.rearGrip *= 0.6;
+        }
+        
+        // Low-speed traction loss (wheelspin simulation)
+        if (speed < 5 && lowSpeedTractionLoss > 0) {
+          const lowSpeedFactor = 1 - (lowSpeedTractionLoss * (1 - speed / 5));
+          car.rearGrip *= lowSpeedFactor;
+        }
+        
+      // 10. Angular Physics with Phase 2 Grip
+        // Calculate steering torque (affected by speed and inertia)
+        const steerTorque = car.steeringAngle * (speed / tuning.maxSpeed) * 0.5;
+        
+        // Angular acceleration based on inertia (torque / inertia)
+        const angularAcceleration = steerTorque / (mass * inertiaMultiplier * 0.001);
+        
+        // Update angular velocity
+        car.angularVelocity += angularAcceleration;
+        
+        // Apply angular damping
+        car.angularVelocity *= angularDamping;
+        
+        // Clamp angular velocity
+        car.angularVelocity = Math.max(-angularVelocityMax, Math.min(angularVelocityMax, car.angularVelocity));
+        
+        // Update car angle from angular velocity
+        car.angle += car.angularVelocity;
 
-        const grip = tuning.corneringStiffness * (isOffroad ? 0.5 : 1.0);
-        const newVelocityAngle = velocityAngle + diff * grip;
+      // 11. Phase 2: Apply Tire Forces (Pure Physics - No Legacy Blending)
+        // Calculate average grip for velocity correction
+        const averageGrip = (car.frontGrip + car.rearGrip) / 2;
+        
+        // Apply realistic grip to align velocity with car angle
+        const newVelocityAngle = velocityAngle + slipAngleRad * averageGrip;
+        
+        car.velocity.x = Math.cos(newVelocityAngle) * speed;
+        car.velocity.y = Math.sin(newVelocityAngle) * speed;
 
-        car.velocity.x = Math.cos(newVelocityAngle) * currentSpeed;
-        car.velocity.y = Math.sin(newVelocityAngle) * currentSpeed;
-
-        car.driftFactor = Math.abs(diff);
+        car.driftFactor = Math.abs(slipAngleRad);
+      } else {
+        // At low speed, decay angular velocity faster
+        car.angularVelocity *= 0.9;
+        car.slipAngle = 0;
+        car.frontSlipAngle = 0;
+        car.rearSlipAngle = 0;
+        car.frontGrip = 1.0;
+        car.rearGrip = 1.0;
       }
 
-      // Cap max speed
-      const newSpeed = Math.sqrt(car.velocity.x**2 + car.velocity.y**2);
-      if (newSpeed > tuning.maxSpeed) {
-        const ratio = tuning.maxSpeed / newSpeed;
+      // 12. Cap max speed
+      const finalSpeed = Math.sqrt(car.velocity.x**2 + car.velocity.y**2);
+      if (finalSpeed > tuning.maxSpeed) {
+        const ratio = tuning.maxSpeed / finalSpeed;
         car.velocity.x *= ratio;
         car.velocity.y *= ratio;
       }
-      car.speed = newSpeed;
+      car.speed = finalSpeed;
 
 
       // --- GAMEPLAY UPDATE ---
